@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0b0d10">
+<title>Fifteen Rounds</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0b0d10; --panel:#15191f; --line:#252d38;
+    --text:#e6ebf2; --muted:#8a93a3;
+    --red:#e74c3c; --gold:#d4af37;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font-family:'Inter',system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+  body{min-height:100vh;min-height:100svh;padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}
+  .wrap{max-width:480px;margin:0 auto;padding:24px 18px 32px}
+  .brand{display:flex;align-items:center;gap:10px;color:var(--muted);font-weight:600;letter-spacing:.12em;font-size:.78rem;text-transform:uppercase}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--red);box-shadow:0 0 12px var(--red)}
+  h1{font-size:clamp(2.4rem,9vw,3.6rem);line-height:1;margin:14px 0 8px;font-weight:900;letter-spacing:-.02em}
+  h1 .accent{color:var(--red);text-shadow:0 0 24px rgba(231,76,60,.45)}
+  .tag{color:var(--muted);font-size:1rem;margin:0 0 28px}
+  .hero{
+    background:linear-gradient(180deg,var(--panel),#10141a);
+    border:1px solid var(--line);border-radius:18px;padding:22px;
+    box-shadow:0 10px 30px rgba(0,0,0,.5), inset 0 1px 0 rgba(255,255,255,.02);
+  }
+  .play{
+    display:flex;align-items:center;justify-content:center;gap:10px;
+    width:100%;min-height:56px;border:0;border-radius:14px;cursor:pointer;
+    background:linear-gradient(180deg,#ef5b4a,#c0392b);color:#fff;
+    font:700 1.15rem/1 'Inter',sans-serif;letter-spacing:.04em;text-transform:uppercase;
+    box-shadow:0 10px 24px rgba(231,76,60,.35), inset 0 1px 0 rgba(255,255,255,.15);
+    transition:transform .1s ease-out, box-shadow .1s ease-out;
+  }
+  .play:hover{box-shadow:0 12px 28px rgba(231,76,60,.45)}
+  .play:active{transform:scale(.96)}
+  .play:focus-visible{outline:3px solid var(--gold);outline-offset:2px}
+  .play svg{width:18px;height:18px}
+  h2{font-size:1.1rem;margin:28px 0 10px;letter-spacing:.02em}
+  .rules{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px 18px;font-size:.95rem;color:#cdd4df}
+  .rules ul{margin:0;padding-left:18px}
+  .rules li{margin:8px 0}
+  .rules b{color:var(--text)}
+  .gold{color:var(--gold)}
+  .red{color:var(--red)}
+  footer{margin-top:28px;text-align:center;color:var(--muted);font-size:.78rem}
+  @media (prefers-reduced-motion:reduce){.play{transition:none}}
+</style>
+</head>
+<body>
+  <main class="wrap">
+    <div class="brand"><span class="dot"></span><span>Fifteen Rounds</span></div>
+    <h1>Fifteen<br><span class="accent">Rounds.</span></h1>
+    <p class="tag">Three rounds. One gun. No friends needed.</p>
+
+    <section class="hero" aria-label="Start a match">
+      <a class="play" href="play.html" role="button" aria-label="Play Fifteen Rounds now">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 4v16l7-4 7 4V4z"/></svg>
+        Tap to Play
+      </a>
+    </section>
+
+    <h2>How it works</h2>
+    <div class="rules">
+      <ul>
+        <li><b>3 rounds</b> per match. Each round loads <b>4 live + 4 blank</b> shells (with a possible ±1 twist).</li>
+        <li>You always go first. On your turn: <span class="red">Shoot the dealer</span> or <span class="gold">shoot yourself</span>.</li>
+        <li>A <b>live</b> shell hurts whoever it hits and ends your turn. A <b>blank</b> fired at yourself keeps your turn going.</li>
+        <li>Items: <b>Magnifier</b> (peek), <b>Handcuffs</b> (skip the next opponent turn), <b>Cigarettes</b> (heal 1 HP). Each side draws up to <b>2 per round</b>.</li>
+        <li>First side to win <b>2 rounds</b> takes the match.</li>
+      </ul>
+    </div>
+
+    <footer>Single-player. No friends. No mercy.</footer>
+  </main>
+</body>
+</html>
