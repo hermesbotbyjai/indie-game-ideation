@@ -555,6 +555,8 @@
     const shell = consumeShell();
     state.currentShell = shell; // for log if needed
     state.playerItems.forEach(it=>{ if(it.faceUp && !it.used){} });
+    // Decide whether the player keeps their turn (blank+self only).
+    let keepTurn = false;
     if(shell === "LIVE"){
       flashScreen();
       if(target === "dealer"){
@@ -573,12 +575,33 @@
         state.blanksChained += 1;
         state.maxBlankChain = Math.max(state.maxBlankChain, state.blanksChained);
         showToast("BLANK — you keep the turn", "blank", 1000);
+        keepTurn = true;
       }
     }
     renderHP();
     setTimeout(()=>{
       state.busy = false;
-      endTurnOrDeath();
+      // Death or empty shells end the round immediately.
+      if(state.playerHP === 0 || state.dealerHP === 0 || state.shells.length === 0){
+        endRound();
+        return;
+      }
+      // Handcuffs: dealer is cuffed, player keeps the turn (regardless of shell outcome).
+      if(state.dealerSkipped){
+        state.dealerSkipped = false;
+        state.phase = "player-turn";
+        renderAll();
+        return;
+      }
+      if(keepTurn){
+        state.phase = "player-turn";
+        renderAll();
+        return;
+      }
+      // Otherwise hand to dealer.
+      state.phase = "dealer-turn";
+      renderAll();
+      setTimeout(dealerTurn, 500);
     }, 1050);
   }
 
@@ -617,7 +640,7 @@
     const it = state.dealerItems[usable];
 
     // Heuristic: use magnifier if current shell unknown AND big blanks chance
-    if(it.type === "MAGNIFIER" && state.shells.length > 0 && !state.dealerKnowsShell()){
+    if(it.type === "MAGNIFIER" && state.shells.length > 0 && !dealerKnowsShell()){
       const blanks = state.shells.filter(s => s === "BLANK").length;
       if(blanks >= 2) return usable;
     }
@@ -669,7 +692,11 @@
       renderAll();
       return;
     }
-    if(state.busy) return;
+    // If something else (e.g. an item use animation) is still busy, come back later.
+    if(state.busy){
+      setTimeout(dealerTurn, 400);
+      return;
+    }
     state.busy = true;
     renderActions();
     const think = setTimeout(()=>{
@@ -686,9 +713,11 @@
       const known = dealerKnowsShell();
       const cur = known ? dealerPeekShell() : null;
       let target;
+      let keepTurn = false;
       if(known && cur === "BLANK"){
         // blank at self → extra shot. But blank at dealer → pass turn (bad). Choose self.
         target = "self";
+        keepTurn = true;
       } else if(known && cur === "LIVE"){
         // known live: shoot player
         target = "player";
@@ -698,10 +727,12 @@
         const lives = state.shells.length - blanks;
         // low-HP bias toward shooting self (hoping for blank chain)
         if(state.dealerHP <= 2 && blanks > 0 && blanks >= lives){
-          target = "self";
+          target = "self"; keepTurn = true;
         } else if(blanks >= 2 && state.dealerHP <= 2){
           // mild bias: chance to shoot self when blanks are plentiful
-          target = state.rng() < 0.45 ? "self" : "player";
+          const isSelf = state.rng() < 0.45;
+          target = isSelf ? "self" : "player";
+          if(isSelf) keepTurn = true;
         } else {
           target = "player";
         }
@@ -732,12 +763,31 @@
       renderHP();
       setTimeout(()=>{
         state.busy = false;
-        endTurnOrDeath();
+        // Death or empty shells end the round.
+        if(state.playerHP === 0 || state.dealerHP === 0 || state.shells.length === 0){
+          endRound();
+          return;
+        }
+        // Handcuffs: player is cuffed, dealer keeps the turn.
+        if(state.playerSkipped){
+          state.playerSkipped = false;
+          state.phase = "dealer-turn";
+          renderAll();
+          setTimeout(dealerTurn, 500);
+          return;
+        }
+        if(keepTurn){
+          state.phase = "dealer-turn";
+          renderAll();
+          setTimeout(dealerTurn, 500);
+          return;
+        }
+        // Hand to player.
+        state.phase = "player-turn";
+        renderAll();
       }, 1050);
     }, 650);
-  }
-
-  // ---------- Round / Match ----------
+  }  // ---------- Round / Match ----------
   function endRound(){
     state.phase = "round-end";
     renderAll();
