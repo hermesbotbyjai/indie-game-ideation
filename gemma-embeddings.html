@@ -1,0 +1,1618 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Gemma Embeddings</title>
+<meta name="description" content="How Google's open embedding model turns text into numbers, and why those numbers are useful.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #ffffff;
+    --bg-soft: #fafafa;
+    --bg-tint: #f3fbf6;
+    --ink: #0d0d0d;
+    --ink-2: #3a3a3a;
+    --ink-3: #6b6b6b;
+    --ink-4: #9a9a9a;
+    --rule: rgba(13, 13, 13, 0.05);
+    --rule-2: rgba(13, 13, 13, 0.10);
+    --accent: #18E299;
+    --accent-deep: #0fb87a;
+    --accent-soft: rgba(24, 226, 153, 0.10);
+    --pos: #18E299;
+    --neg: #ff5b5b;
+    --near: #c9c9c9;
+    --warn: #f5a623;
+    --shadow-sm: 0 1px 2px rgba(13,13,13,0.04);
+    --shadow-md: 0 6px 24px rgba(13,13,13,0.06);
+    --r-sm: 12px;
+    --r-md: 16px;
+    --r-lg: 22px;
+    --r-xl: 28px;
+    --gutter: 24px;
+    --max: 1200px;
+    --hero-h1: 64px;
+    --h2: 40px;
+    --h3: 26px;
+    --h4: 22px;
+    --body: 16px;
+    --body-lh: 1.5;
+    --label: 12px;
+    --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    --font-mono: 'Geist Mono', 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--font-sans);
+    font-size: var(--body);
+    line-height: var(--body-lh);
+    font-feature-settings: "ss01", "cv11";
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    overflow-x: hidden;
+  }
+
+  a { color: inherit; text-decoration: none; }
+  a:focus-visible, button:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+    border-radius: 6px;
+  }
+
+  .wrap {
+    width: 100%;
+    max-width: var(--max);
+    margin: 0 auto;
+    padding: 0 var(--gutter);
+  }
+
+  /* ----- nav ----- */
+  .nav {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    background: rgba(255,255,255,0.85);
+    backdrop-filter: saturate(180%) blur(8px);
+    -webkit-backdrop-filter: saturate(180%) blur(8px);
+    border-bottom: 1px solid var(--rule);
+  }
+  .nav-inner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 56px;
+  }
+  .nav-brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+  .nav-logo {
+    width: 22px;
+    height: 22px;
+    border-radius: 7px;
+    background: var(--ink);
+    display: grid;
+    place-items: center;
+    color: var(--accent);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .nav-links {
+    display: flex;
+    gap: 22px;
+    font-size: 14px;
+    color: var(--ink-3);
+  }
+  .nav-links a:hover { color: var(--ink); }
+  .nav-cta {
+    padding: 8px 14px;
+    border: 1px solid var(--rule-2);
+    border-radius: 9999px;
+    font-size: 13px;
+    font-weight: 500;
+    transition: all .2s ease;
+  }
+  .nav-cta:hover { border-color: var(--ink); }
+
+  /* ----- hero ----- */
+  .hero {
+    position: relative;
+    padding: 96px 0 80px;
+    overflow: hidden;
+  }
+  .hero::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background:
+      radial-gradient(60% 50% at 50% 0%, rgba(24,226,153,0.18), transparent 70%),
+      radial-gradient(80% 60% at 50% 30%, rgba(24,226,153,0.06), transparent 70%);
+    pointer-events: none;
+  }
+  .hero-inner { position: relative; text-align: center; max-width: 880px; margin: 0 auto; }
+  .label {
+    display: inline-block;
+    font-family: var(--font-mono);
+    font-size: var(--label);
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent-deep);
+    background: var(--accent-soft);
+    padding: 6px 12px;
+    border-radius: 9999px;
+    font-weight: 500;
+  }
+  .hero h1 {
+    font-size: var(--hero-h1);
+    line-height: 1.05;
+    font-weight: 600;
+    letter-spacing: -0.03em;
+    margin: 22px 0 18px;
+    color: var(--ink);
+  }
+  .hero p.tagline {
+    font-size: 20px;
+    line-height: 1.5;
+    color: var(--ink-2);
+    margin: 0 auto 36px;
+    max-width: 720px;
+    font-weight: 400;
+  }
+  .hero p.tagline strong { color: var(--ink); font-weight: 600; }
+  .will-get {
+    display: inline-flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 8px 14px;
+    font-size: 14px;
+    color: var(--ink-3);
+    margin-top: 8px;
+  }
+  .will-get span {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 6px 12px;
+    background: var(--bg);
+    border: 1px solid var(--rule);
+    border-radius: 9999px;
+  }
+  .will-get span::before {
+    content: "";
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--accent);
+  }
+
+  /* ----- section base ----- */
+  section { padding: 96px 0; }
+  section.tight { padding: 64px 0; }
+  .section-head { margin-bottom: 36px; }
+  .section-head .label { margin-bottom: 14px; }
+  .section-head h2 {
+    font-size: var(--h2);
+    line-height: 1.1;
+    font-weight: 600;
+    letter-spacing: -0.025em;
+    margin: 0 0 12px;
+  }
+  .section-head p.lede {
+    font-size: 18px;
+    color: var(--ink-3);
+    margin: 0;
+    max-width: 740px;
+  }
+
+  /* ----- one-sentence model ----- */
+  .model-callout {
+    border-left: 3px solid var(--accent);
+    background: var(--bg-tint);
+    padding: 28px 28px 28px 32px;
+    border-radius: 0 var(--r-md) var(--r-md) 0;
+    font-size: 19px;
+    line-height: 1.55;
+    color: var(--ink);
+    font-weight: 500;
+    letter-spacing: -0.005em;
+  }
+  .model-callout .quote-mark {
+    font-family: var(--font-mono);
+    color: var(--accent-deep);
+    font-weight: 600;
+  }
+  .model-callout code { background: rgba(13,13,13,0.04); padding: 1px 6px; border-radius: 4px; font-size: 0.92em; }
+
+  /* ----- diagram frame ----- */
+  .diagram-frame {
+    background: var(--bg);
+    border: 1px solid var(--rule);
+    border-radius: var(--r-lg);
+    padding: 28px;
+    overflow: hidden;
+  }
+  .diagram-frame svg { display: block; max-width: 100%; height: auto; }
+  .diagram-caption {
+    font-size: 13px;
+    color: var(--ink-3);
+    margin-top: 12px;
+    line-height: 1.5;
+  }
+
+  /* ----- mental model section ----- */
+  .mental {
+    background: linear-gradient(180deg, var(--bg) 0%, var(--bg-soft) 100%);
+    border-top: 1px solid var(--rule);
+    border-bottom: 1px solid var(--rule);
+  }
+  .mental .diagram-frame { background: var(--bg); box-shadow: var(--shadow-md); }
+
+  /* ----- walkthrough ----- */
+  .walk { display: grid; grid-template-columns: 1fr; gap: 48px; }
+  .walk-step {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 24px;
+  }
+  @media (min-width: 920px) {
+    .walk-step {
+      grid-template-columns: 320px minmax(0, 1fr);
+      gap: 56px;
+      align-items: start;
+    }
+    .walk-step.flip { grid-template-columns: minmax(0, 1fr) 320px; }
+    .walk-step.flip .step-num { order: 2; }
+    .walk-step.flip .step-body { order: 1; }
+  }
+  .step-num {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--accent-deep);
+    margin-bottom: 8px;
+  }
+  .step-body h3 {
+    font-size: var(--h3);
+    line-height: 1.2;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    margin: 0 0 12px;
+  }
+  .step-body p {
+    color: var(--ink-2);
+    margin: 0 0 14px;
+    font-size: 17px;
+  }
+  .step-body p code, .step-body code { background: rgba(13,13,13,0.05); padding: 1px 6px; border-radius: 4px; font-size: 0.92em; font-family: var(--font-mono); }
+  .why {
+    margin-top: 18px;
+    background: var(--bg-soft);
+    border: 1px solid var(--rule);
+    border-radius: var(--r-md);
+    padding: 16px 18px;
+    font-size: 14px;
+  }
+  .why .why-label {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    margin-bottom: 6px;
+    display: inline-block;
+  }
+  .why p { margin: 0; color: var(--ink-2); font-size: 14px; line-height: 1.55; }
+  .why p strong { color: var(--ink); font-weight: 600; }
+
+  /* ----- confusions ----- */
+  .confusions {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+  @media (min-width: 720px) { .confusions { grid-template-columns: 1fr 1fr; } }
+  .conf-card {
+    border: 1px solid var(--rule);
+    border-radius: var(--r-lg);
+    padding: 22px 24px;
+    background: var(--bg);
+  }
+  .conf-card .n {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--neg);
+    margin-bottom: 8px;
+    display: inline-block;
+  }
+  .conf-card .wrong {
+    font-style: italic;
+    color: var(--ink-2);
+    font-size: 16px;
+    margin: 0 0 14px;
+    line-height: 1.5;
+  }
+  .conf-card .right {
+    border-top: 1px dashed var(--rule-2);
+    padding-top: 14px;
+    color: var(--ink);
+    font-size: 15px;
+    line-height: 1.55;
+  }
+  .conf-card .right::before {
+    content: "Reality: ";
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent-deep);
+    margin-right: 4px;
+    font-weight: 600;
+  }
+
+  /* ----- next links ----- */
+  .next-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 14px;
+  }
+  @media (min-width: 720px) { .next-grid { grid-template-columns: repeat(3, 1fr); } }
+  .next-card {
+    border: 1px solid var(--rule);
+    border-radius: var(--r-lg);
+    padding: 22px 24px;
+    transition: all .2s ease;
+    display: block;
+  }
+  .next-card:hover {
+    border-color: var(--ink);
+    transform: translateY(-1px);
+  }
+  .next-card .kind {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent-deep);
+    margin-bottom: 10px;
+    display: block;
+  }
+  .next-card h4 {
+    font-size: 17px;
+    font-weight: 600;
+    margin: 0 0 8px;
+    color: var(--ink);
+    letter-spacing: -0.01em;
+  }
+  .next-card p {
+    margin: 0;
+    font-size: 14px;
+    color: var(--ink-3);
+    line-height: 1.5;
+  }
+  .next-card .arrow {
+    display: inline-block;
+    margin-top: 12px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--ink);
+  }
+
+  /* ----- footer ----- */
+  footer {
+    border-top: 1px solid var(--rule);
+    padding: 40px 0 60px;
+    color: var(--ink-3);
+    font-size: 14px;
+  }
+  footer .series {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent-deep);
+    margin-bottom: 8px;
+    display: inline-block;
+  }
+
+  /* ----- prose utilities ----- */
+  .lede { font-size: 18px; color: var(--ink-3); }
+  code { font-family: var(--font-mono); }
+
+  /* ----- animations ----- */
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes drawIn {
+    from { stroke-dashoffset: var(--len, 200); }
+    to { stroke-dashoffset: 0; }
+  }
+  @keyframes pop {
+    from { opacity: 0; transform: scale(0.6); }
+    to { opacity: 1; transform: scale(1); }
+  }
+  @keyframes growX {
+    from { transform: scaleX(0); }
+    to { transform: scaleX(1); }
+  }
+  @keyframes blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.35; }
+  }
+  @keyframes pulse-accent {
+    0%, 100% { opacity: 0.5; }
+    50% { opacity: 1; }
+  }
+  @keyframes scan {
+    from { transform: translateX(0); }
+    to { transform: translateX(100%); }
+  }
+
+  .reveal { opacity: 0; animation: fadeUp .6s ease-out forwards; }
+  .r1 { animation-delay: .05s; }
+  .r2 { animation-delay: .12s; }
+  .r3 { animation-delay: .18s; }
+  .r4 { animation-delay: .24s; }
+
+  /* ----- responsive ----- */
+  @media (max-width: 720px) {
+    :root {
+      --hero-h1: 44px;
+      --h2: 32px;
+      --h3: 22px;
+      --h4: 19px;
+      --body: 16px;
+    }
+    .hero { padding: 64px 0 48px; }
+    section { padding: 48px 0; }
+    section.tight { padding: 32px 0; }
+    .hero p.tagline { font-size: 17px; }
+    .model-callout { font-size: 17px; padding: 22px; }
+    .nav-links { display: none; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation: none !important;
+      transition: none !important;
+    }
+    .reveal { opacity: 1; }
+  }
+</style>
+</head>
+<body>
+
+<nav class="nav" aria-label="Primary">
+  <div class="wrap nav-inner">
+    <a class="nav-brand" href="#top">
+      <span class="nav-logo">H</span>
+      <span>Explainer Series</span>
+    </a>
+    <div class="nav-links">
+      <a href="#model">The model</a>
+      <a href="#walkthrough">Walkthrough</a>
+      <a href="#confusions">Confusions</a>
+      <a href="#next">Next</a>
+    </div>
+    <a class="nav-cta" href="#next">Read next</a>
+  </div>
+</nav>
+
+<!-- ============================================================= -->
+<!-- HERO                                                          -->
+<!-- ============================================================= -->
+<header class="hero" id="top">
+  <div class="wrap hero-inner">
+    <span class="label reveal r1">Day 1 · Embeddings</span>
+    <h1 class="reveal r2">Gemma Embeddings</h1>
+    <p class="tagline reveal r3">
+      How Google's open embedding model turns text into numbers, and why those numbers are useful for retrieval, search, clustering, and just about anything you'd want a model to <em>compare</em>.
+    </p>
+    <div class="will-get reveal r4">
+      <span>Start from zero</span>
+      <span>Visual mental model</span>
+      <span>Senior DS depth</span>
+      <span>One readable page</span>
+    </div>
+  </div>
+</header>
+
+<!-- ============================================================= -->
+<!-- THE MODEL IN ONE SENTENCE                                     -->
+<!-- ============================================================= -->
+<section class="tight" id="model">
+  <div class="wrap">
+    <div class="section-head">
+      <span class="label">The model in one sentence</span>
+    </div>
+    <p class="model-callout">
+      <span class="quote-mark">"</span>A Gemma embedding is a learned function <code>f(text) → R<sup>768</sup></code> that turns any string of words into a fixed-length vector of numbers, where semantically similar inputs land near each other in space, and dissimilar inputs land far apart.
+    </p>
+  </div>
+</section>
+
+<!-- ============================================================= -->
+<!-- MENTAL MODEL DIAGRAM                                          -->
+<!-- ============================================================= -->
+<section class="mental" id="mental">
+  <div class="wrap">
+    <div class="section-head" style="text-align:center; max-width:720px; margin: 0 auto 40px;">
+      <span class="label">The mental model</span>
+      <h2>The whole pipeline, end to end</h2>
+      <p class="lede">One sentence in. One vector out. Watch the pieces wire up.</p>
+    </div>
+
+    <div class="diagram-frame">
+      <svg viewBox="0 0 1080 520" role="img" aria-label="Pipeline: text -> tokens -> transformer -> 768-dim vector">
+        <defs>
+          <linearGradient id="accentFade" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%" stop-color="#18E299" stop-opacity="0.0"/>
+            <stop offset="50%" stop-color="#18E299" stop-opacity="0.6"/>
+            <stop offset="100%" stop-color="#18E299" stop-opacity="0.0"/>
+          </linearGradient>
+          <linearGradient id="transformerFill" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#f3fbf6"/>
+            <stop offset="100%" stop-color="#ffffff"/>
+          </linearGradient>
+          <marker id="arrowG" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L0,6 L9,3 z" fill="#0fb87a"/>
+          </marker>
+          <marker id="arrowD" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L0,6 L9,3 z" fill="#0d0d0d"/>
+          </marker>
+        </defs>
+
+        <!-- Stage 1: input text -->
+        <g transform="translate(40,40)">
+          <text class="mono-label" x="0" y="-10" font-family="Geist Mono, monospace" font-size="11" letter-spacing="2" fill="#6b6b6b">INPUT</text>
+          <rect x="0" y="0" width="190" height="72" rx="12" fill="#fafafa" stroke="rgba(13,13,13,0.10)"/>
+          <text id="inputText" x="95" y="32" text-anchor="middle" font-family="Inter, sans-serif" font-size="15" fill="#0d0d0d" font-weight="500">
+            The cat sat on the mat
+          </text>
+          <text x="95" y="52" text-anchor="middle" font-family="Geist Mono, monospace" font-size="11" fill="#9a9a9a" letter-spacing="0.5">
+            raw string
+          </text>
+        </g>
+
+        <!-- arrow -->
+        <line x1="232" y1="76" x2="288" y2="76" stroke="#0d0d0d" stroke-width="1.2" marker-end="url(#arrowD)"/>
+        <text x="260" y="64" text-anchor="middle" font-family="Geist Mono, monospace" font-size="10" fill="#9a9a9a">split</text>
+
+        <!-- Stage 2: tokens -->
+        <g transform="translate(296,40)">
+          <text x="0" y="-10" font-family="Geist Mono, monospace" font-size="11" letter-spacing="2" fill="#6b6b6b">TOKENS (BPE)</text>
+          <g id="tokensBox">
+            <g class="token-chip">
+              <rect x="0"   y="14" width="34" height="34" rx="7" fill="#fff" stroke="rgba(13,13,13,0.10)"/>
+              <text x="17"  y="36" text-anchor="middle" font-family="Geist Mono, monospace" font-size="11" fill="#0d0d0d">the</text>
+            </g>
+            <g class="token-chip">
+              <rect x="38"  y="14" width="34" height="34" rx="7" fill="#fff" stroke="rgba(13,13,13,0.10)"/>
+              <text x="55"  y="36" text-anchor="middle" font-family="Geist Mono, monospace" font-size="11" fill="#0d0d0d">cat</text>
+            </g>
+            <g class="token-chip">
+              <rect x="76"  y="14" width="34" height="34" rx="7" fill="#fff" stroke="rgba(13,13,13,0.10)"/>
+              <text x="93"  y="36" text-anchor="middle" font-family="Geist Mono, monospace" font-size="11" fill="#0d0d0d">sat</text>
+            </g>
+            <g class="token-chip">
+              <rect x="114" y="14" width="34" height="34" rx="7" fill="#fff" stroke="rgba(13,13,13,0.10)"/>
+              <text x="131" y="36" text-anchor="middle" font-family="Geist Mono, monospace" font-size="11" fill="#0d0d0d">on</text>
+            </g>
+            <g class="token-chip">
+              <rect x="152" y="14" width="34" height="34" rx="7" fill="#fff" stroke="rgba(13,13,13,0.10)"/>
+              <text x="169" y="36" text-anchor="middle" font-family="Geist Mono, monospace" font-size="11" fill="#0d0d0d">the</text>
+            </g>
+            <g class="token-chip">
+              <rect x="190" y="14" width="34" height="34" rx="7" fill="#fff" stroke="rgba(13,13,13,0.10)"/>
+              <text x="207" y="36" text-anchor="middle" font-family="Geist Mono, monospace" font-size="11" fill="#0d0d0d">mat</text>
+            </g>
+          </g>
+          <text x="112" y="74" text-anchor="middle" font-family="Geist Mono, monospace" font-size="11" fill="#9a9a9a">
+            7 tokens · ids 0–255232
+          </text>
+        </g>
+
+        <!-- arrow -->
+        <line x1="528" y1="76" x2="588" y2="76" stroke="#0d0d0d" stroke-width="1.2" marker-end="url(#arrowD)"/>
+        <text x="558" y="64" text-anchor="middle" font-family="Geist Mono, monospace" font-size="10" fill="#9a9a9a">embed</text>
+
+        <!-- Stage 3: Transformer stack -->
+        <g transform="translate(596,30)">
+          <text x="0" y="-10" font-family="Geist Mono, monospace" font-size="11" letter-spacing="2" fill="#6b6b6b">TRANSFORMER · 8 LAYERS</text>
+
+          <g id="txStack" fill="url(#transformerFill)" stroke="rgba(13,13,13,0.10)">
+            <rect x="0" y="0"   width="160" height="48" rx="9"/>
+            <rect x="6" y="48"  width="160" height="48" rx="9"/>
+            <rect x="0" y="96"  width="160" height="48" rx="9"/>
+            <rect x="6" y="144" width="160" height="48" rx="9"/>
+            <rect x="0" y="192" width="160" height="48" rx="9"/>
+            <rect x="6" y="240" width="160" height="48" rx="9"/>
+            <rect x="0" y="288" width="160" height="48" rx="9"/>
+            <rect x="6" y="336" width="160" height="48" rx="9"/>
+          </g>
+
+          <g id="layerLabels" font-family="Geist Mono, monospace" font-size="10" fill="#6b6b6b">
+            <text x="10" y="20">attn</text>
+            <text x="16" y="68">attn</text>
+            <text x="10" y="116">attn</text>
+            <text x="16" y="164">attn</text>
+            <text x="10" y="212">attn</text>
+            <text x="16" y="260">attn</text>
+            <text x="10" y="308">attn</text>
+            <text x="16" y="356">attn</text>
+          </g>
+
+          <!-- draw-in overlay rectangles (animated border) -->
+          <g id="txDrawIn" fill="none" stroke="#18E299" stroke-width="2" stroke-linecap="round" opacity="0.85">
+            <rect class="lay-line" x="0" y="0"   width="160" height="48"  rx="9" pathLength="100" stroke-dasharray="3 5"/>
+            <rect class="lay-line" x="6" y="48"  width="160" height="48"  rx="9" pathLength="100" stroke-dasharray="3 5"/>
+            <rect class="lay-line" x="0" y="96"  width="160" height="48"  rx="9" pathLength="100" stroke-dasharray="3 5"/>
+            <rect class="lay-line" x="6" y="144" width="160" height="48"  rx="9" pathLength="100" stroke-dasharray="3 5"/>
+            <rect class="lay-line" x="0" y="192" width="160" height="48"  rx="9" pathLength="100" stroke-dasharray="3 5"/>
+            <rect class="lay-line" x="6" y="240" width="160" height="48"  rx="9" pathLength="100" stroke-dasharray="3 5"/>
+            <rect class="lay-line" x="0" y="288" width="160" height="48"  rx="9" pathLength="100" stroke-dasharray="3 5"/>
+            <rect class="lay-line" x="6" y="336" width="160" height="48"  rx="9" pathLength="100" stroke-dasharray="3 5"/>
+          </g>
+
+          <text x="80" y="410" text-anchor="middle" font-family="Geist Mono, monospace" font-size="11" fill="#9a9a9a">
+            each layer: attention + MLP
+          </text>
+        </g>
+
+        <!-- arrow -->
+        <line x1="780" y1="220" x2="838" y2="220" stroke="#0d0d0d" stroke-width="1.2" marker-end="url(#arrowD)"/>
+        <text x="809" y="208" text-anchor="middle" font-family="Geist Mono, monospace" font-size="10" fill="#9a9a9a">pool</text>
+
+        <!-- Stage 4: 768-dim vector -->
+        <g transform="translate(846,30)">
+          <text x="0" y="-10" font-family="Geist Mono, monospace" font-size="11" letter-spacing="2" fill="#6b6b6b">768-D VECTOR</text>
+
+          <g id="vectorBar" transform="translate(0,40)"></g>
+
+          <text x="115" y="50" text-anchor="middle" font-family="Geist Mono, monospace" font-size="10" fill="#9a9a9a" letter-spacing="0.5">
+            cosine-sim lives here
+          </text>
+
+          <!-- labeled dims above -->
+          <g font-family="Geist Mono, monospace" font-size="10" fill="#0d0d0d">
+            <line x1="20"  y1="0" x2="20"  y2="36" stroke="rgba(13,13,13,0.25)" stroke-dasharray="2 3"/>
+            <line x1="85"  y1="0" x2="85"  y2="36" stroke="rgba(13,13,13,0.25)" stroke-dasharray="2 3"/>
+            <line x1="150" y1="0" x2="150" y2="36" stroke="rgba(13,13,13,0.25)" stroke-dasharray="2 3"/>
+            <line x1="215" y1="0" x2="215" y2="36" stroke="rgba(13,13,13,0.25)" stroke-dasharray="2 3"/>
+          </g>
+          <g font-family="Geist Mono, monospace" font-size="10">
+            <text x="20"  y="-2" text-anchor="middle" fill="#3a3a3a">dim 412 · animals <tspan fill="#0fb87a" font-weight="600">+0.31</tspan></text>
+            <text x="85"  y="-2" text-anchor="middle" fill="#3a3a3a">dim 17  · domestic <tspan fill="#0fb87a" font-weight="600">+0.18</tspan></text>
+            <text x="150" y="-2" text-anchor="middle" fill="#3a3a3a">dim 503 · furniture <tspan fill="#0fb87a" font-weight="600">+0.22</tspan></text>
+            <text x="215" y="-2" text-anchor="middle" fill="#3a3a3a">dim 71  · sitting <tspan fill="#0fb87a" font-weight="600">+0.14</tspan></text>
+          </g>
+
+          <text x="115" y="430" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" fill="#3a3a3a" font-weight="500">
+            f(sentence) ∈ R<tspan baseline-shift="super" font-size="9">768</tspan>
+          </text>
+        </g>
+
+        <!-- spotlight scan at end -->
+        <rect id="scanBar" x="846" y="30" width="3" height="430" fill="url(#accentFade)" opacity="0">
+          <animate attributeName="opacity" values="0;0;0.9;0" keyTimes="0;0.45;0.55;1" dur="9s" begin="0s" repeatCount="indefinite"/>
+          <animate attributeName="x" from="846" to="1076" dur="9s" begin="0s" repeatCount="indefinite"/>
+        </rect>
+      </svg>
+
+      <p class="diagram-caption">
+        Same 768 numbers, every time, for any input up to the model's context length. Comparable across sentences, paragraphs, or whole documents, the way integers are comparable across any list.
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================= -->
+<!-- WALKTHROUGH                                                   -->
+<!-- ============================================================= -->
+<section id="walkthrough">
+  <div class="wrap">
+    <div class="section-head">
+      <span class="label">Walkthrough</span>
+      <h2>Six pieces, one each</h2>
+      <p class="lede">Each section below has one paragraph of explanation, one inline diagram, and one short aside on why this piece earns its keep.</p>
+    </div>
+
+    <div class="walk">
+
+      <!-- a -->
+      <div class="walk-step" id="step-what">
+        <div>
+          <span class="step-num">A · What it actually is</span>
+        </div>
+        <div class="step-body">
+          <h3>An embedding is a vector where meaning is geometry.</h3>
+          <p>
+            Take the words <em>king</em>, <em>queen</em>, <em>car</em>, and <em>banana</em>. Each one becomes a list of numbers. The numbers themselves look like noise, but if you plotted them in space, royalty would cluster together. Vehicles would sit in another neighborhood. Fruit would be somewhere else entirely. The whole job of an embedding model is to learn that geometry so you can use it later, for search, clustering, classification, or anything that needs a notion of <em>close</em>.
+          </p>
+          <p>
+            How close is <em>close</em>? You measure it with cosine similarity, which we'll come back to. For now, just remember: similarity in vector space is the substitute for similarity in meaning.
+          </p>
+          <div class="diagram-frame" style="margin-top:18px;">
+            <svg viewBox="0 0 600 220" role="img" aria-label="Vector space concept: similar vectors cluster together">
+              <defs>
+                <marker id="aArrowG" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L7,3 z" fill="#0fb87a"/></marker>
+              </defs>
+              <!-- axes -->
+              <line x1="40" y1="190" x2="570" y2="190" stroke="rgba(13,13,13,0.15)"/>
+              <line x1="40" y1="20"  x2="40"  y2="190" stroke="rgba(13,13,13,0.15)"/>
+              <text x="558" y="208" text-anchor="end" font-family="Geist Mono, monospace" font-size="10" fill="#9a9a9a">dim B</text>
+              <text x="50"  y="32"  font-family="Geist Mono, monospace" font-size="10" fill="#9a9a9a">dim A</text>
+
+              <!-- cluster 1: animals -->
+              <circle cx="160" cy="80" r="42" fill="rgba(24,226,153,0.10)" stroke="rgba(24,226,153,0.5)" stroke-dasharray="3 4"/>
+              <text x="100" y="50" font-family="Geist Mono, monospace" font-size="10" fill="#0fb87a" letter-spacing="1">ANIMALS</text>
+              <g id="animalsCluster" fill="#0d0d0d">
+                <circle cx="155" cy="78" r="4"/><text x="162" y="80" font-family="Inter, sans-serif" font-size="11">cat</text>
+                <circle cx="178" cy="92" r="4"/><text x="185" y="94" font-family="Inter, sans-serif" font-size="11">dog</text>
+                <circle cx="148" cy="98" r="4"/><text x="125" y="100" font-family="Inter, sans-serif" font-size="11">horse</text>
+                <circle cx="170" cy="65" r="4"/><text x="177" y="67" font-family="Inter, sans-serif" font-size="11">panda</text>
+              </g>
+
+              <!-- cluster 2: vehicles -->
+              <circle cx="380" cy="140" r="42" fill="rgba(24,226,153,0.10)" stroke="rgba(24,226,153,0.5)" stroke-dasharray="3 4"/>
+              <text x="378" y="110" font-family="Geist Mono, monospace" font-size="10" fill="#0fb87a" letter-spacing="1">VEHICLES</text>
+              <g fill="#0d0d0d">
+                <circle cx="370" cy="140" r="4"/><text x="378" y="142" font-family="Inter, sans-serif" font-size="11">car</text>
+                <circle cx="395" cy="135" r="4"/><text x="402" y="137" font-family="Inter, sans-serif" font-size="11">bus</text>
+                <circle cx="385" cy="155" r="4"/><text x="392" y="157" font-family="Inter, sans-serif" font-size="11">van</text>
+                <circle cx="360" cy="155" r="4"/><text x="335" y="157" font-family="Inter, sans-serif" font-size="11">truck</text>
+              </g>
+
+              <!-- cluster 3: furniture -->
+              <circle cx="450" cy="55" r="42" fill="rgba(24,226,153,0.10)" stroke="rgba(24,226,153,0.5)" stroke-dasharray="3 4"/>
+              <text x="438" y="32" font-family="Geist Mono, monospace" font-size="10" fill="#0fb87a" letter-spacing="1">FURNITURE</text>
+              <g fill="#0d0d0d">
+                <circle cx="445" cy="58" r="4"/><text x="452" y="60" font-family="Inter, sans-serif" font-size="11">chair</text>
+                <circle cx="465" cy="48" r="4"/><text x="472" y="50" font-family="Inter, sans-serif" font-size="11">desk</text>
+                <circle cx="445" cy="72" r="4"/><text x="420" y="74" font-family="Inter, sans-serif" font-size="11">sofa</text>
+                <circle cx="470" cy="68" r="4"/><text x="478" y="70" font-family="Inter, sans-serif" font-size="11">bed</text>
+              </g>
+            </svg>
+            <p class="diagram-caption">A 2D sketch. Real Gemma vectors live in 768 dimensions, which is enough room for words to find their own neighborhoods without bumping into each other.</p>
+          </div>
+          <div class="why">
+            <span class="why-label">Why this matters</span>
+            <p><strong>Everything downstream rides on the geometry.</strong> Retrieval, deduplication, recommendation, classification, clustering, anomaly detection. None of these work unless the embedding function learned distances that match what humans would call <em>similar</em>.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- b -->
+      <div class="walk-step flip" id="step-tokens">
+        <div>
+          <span class="step-num">B · Tokenization</span>
+        </div>
+        <div class="step-body">
+          <h3>First, text becomes tokens, then token IDs.</h3>
+          <p>
+            Models don't read characters or words. They read tokens, which are short chunks of characters picked from a fixed vocabulary (Gemma's has 256K of them). The tokenizer is Byte-Pair Encoding: it greedily merges the most frequent adjacent pairs until nothing else combines.
+          </p>
+          <p>
+            Why bother? Because it gives the model a stable vocabulary across languages and misspellings. <code>"unhappiness"</code> doesn't need its own entry; <code>"un"</code> + <code>"happiness"</code> covers it, and so does <code>"un"</code> + <code>"happi"</code> + <code>"ness"</code>. Each token gets an integer ID (a number that points into the model's embedding table), and that's what actually flows downstream.
+          </p>
+          <div class="diagram-frame" style="margin-top:18px;">
+            <svg viewBox="0 0 600 180" role="img" aria-label="Tokenization: sentence split into BPE tokens with ids">
+              <g font-family="Geist Mono, monospace" font-size="12" fill="#0d0d0d">
+                <text x="20"  y="34" font-weight="600">"unhappiness"</text>
+                <line x1="20" y1="46" x2="200" y2="46" stroke="rgba(13,13,13,0.15)"/>
+                <line x1="92" y1="40" x2="92" y2="56" stroke="#18E299" stroke-width="2"/>
+                <text x="42"  y="78"  text-anchor="middle">un</text>
+                <text x="142" y="78"  text-anchor="middle">happiness</text>
+                <text x="42"  y="100" text-anchor="middle" font-size="10" fill="#9a9a9a">id 1287</text>
+                <text x="142" y="100" text-anchor="middle" font-size="10" fill="#9a9a9a">id 4091</text>
+              </g>
+              <g font-family="Inter, sans-serif" font-size="13" fill="#0d0d0d">
+                <text x="240" y="36">→</text>
+                <text x="260" y="34" font-family="Geist Mono, monospace" font-size="12">[1287, 4091]</text>
+              </g>
+              <g font-family="Inter, sans-serif" font-size="12" fill="#3a3a3a">
+                <text x="20"  y="130">2 tokens, 1 word. Vocabulary hit: 2/256000.</text>
+                <text x="20"  y="148" fill="#9a9a9a" font-family="Geist Mono, monospace" font-size="10">the model never sees the word "unhappiness". it sees two IDs, looked up in a table.</text>
+              </g>
+              <!-- merge animation placeholder, fixed for reduced motion -->
+              <g opacity="0.0">
+                <rect x="20" y="46" width="170" height="10" fill="#18E299"/>
+              </g>
+            </svg>
+            <p class="diagram-caption">Subword tokenization is what makes these models multilingual without ballooning the vocabulary. Rare words become sequences of common pieces. Common words stay whole.</p>
+          </div>
+          <div class="why">
+            <span class="why-label">Why this matters</span>
+            <p><strong>Your billable tokens start here.</strong> Every API charge, every context window limit, every latency estimate is denominated in tokens, not characters. Knowing that one "word" can equal four tokens explains a lot of weird pricing math.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- c -->
+      <div class="walk-step" id="step-attention">
+        <div>
+          <span class="step-num">C · Attention</span>
+        </div>
+        <div class="step-body">
+          <h3>Attention lets each token look at every other token.</h3>
+          <p>
+            Once you have a list of token vectors (each one a learned embedding of a chunk of text), the transformer needs a way for them to <em>talk</em>. That's attention. Every token produces three vectors from its embedding: a <strong>query</strong> (<code>Q</code>), a <strong>key</strong> (<code>K</code>), and a <strong>value</strong> (<code>V</code>).
+          </p>
+          <p>
+            To update itself, a token asks: <em>how relevant is every other token to me?</em> It scores each one by <code>Q · K</code>, softmaxes the scores into weights, and uses those weights to mix the <code>V</code> vectors. The result is a new vector that has been enriched with context from the whole sequence. Eight stacked layers in Gemma do this eight times, with a multi-layer perceptron in between.
+          </p>
+          <div class="diagram-frame" style="margin-top:18px;">
+            <svg viewBox="0 0 600 280" role="img" aria-label="Attention: three tokens producing Q, K, V vectors">
+              <defs>
+                <marker id="aLine" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+                  <path d="M0,0 L0,6 L7,3 z" fill="#0d0d0d" opacity="0.6"/>
+                </marker>
+              </defs>
+
+              <!-- three input tokens -->
+              <g font-family="Inter, sans-serif" font-size="13" fill="#0d0d0d">
+                <g transform="translate(60,120)">
+                  <circle r="22" fill="#fff" stroke="#0d0d0d" stroke-width="1.5"/>
+                  <text text-anchor="middle" y="5" font-family="Geist Mono, monospace" font-size="11">the</text>
+                  <text text-anchor="middle" y="40" font-size="10" fill="#9a9a9a" font-family="Geist Mono, monospace">token 1</text>
+                </g>
+                <g transform="translate(60,180)">
+                  <circle r="22" fill="#fff" stroke="#0d0d0d" stroke-width="1.5"/>
+                  <text text-anchor="middle" y="5" font-family="Geist Mono, monospace" font-size="11">cat</text>
+                  <text text-anchor="middle" y="40" font-size="10" fill="#9a9a9a" font-family="Geist Mono, monospace">token 2</text>
+                </g>
+                <g transform="translate(60,240)">
+                  <circle r="22" fill="#fff" stroke="#0d0d0d" stroke-width="1.5"/>
+                  <text text-anchor="middle" y="5" font-family="Geist Mono, monospace" font-size="11">sat</text>
+                  <text text-anchor="middle" y="40" font-size="10" fill="#9a9a9a" font-family="Geist Mono, monospace">token 3</text>
+                </g>
+              </g>
+
+              <!-- three projection lines to QKV -->
+              <g stroke="#0d0d0d" stroke-width="1" opacity="0.6" fill="none">
+                <line x1="82" y1="120" x2="200" y2="60" marker-end="url(#aLine)"/>
+                <line x1="82" y1="120" x2="200" y2="100" marker-end="url(#aLine)"/>
+                <line x1="82" y1="120" x2="200" y2="140" marker-end="url(#aLine)"/>
+
+                <line x1="82" y1="180" x2="200" y2="60" marker-end="url(#aLine)"/>
+                <line x1="82" y1="180" x2="200" y2="100" marker-end="url(#aLine)"/>
+                <line x1="82" y1="180" x2="200" y2="140" marker-end="url(#aLine)"/>
+
+                <line x1="82" y1="240" x2="200" y2="60" marker-end="url(#aLine)"/>
+                <line x1="82" y1="240" x2="200" y2="100" marker-end="url(#aLine)"/>
+                <line x1="82" y1="240" x2="200" y2="140" marker-end="url(#aLine)"/>
+              </g>
+
+              <!-- QKV boxes -->
+              <g font-family="Geist Mono, monospace" font-size="12">
+                <rect x="210" y="46"  width="60" height="28" rx="6" fill="rgba(13,13,13,0.04)" stroke="rgba(13,13,13,0.15)"/>
+                <text x="240" y="64" text-anchor="middle">Q</text>
+                <rect x="210" y="86"  width="60" height="28" rx="6" fill="rgba(13,13,13,0.04)" stroke="rgba(13,13,13,0.15)"/>
+                <text x="240" y="104" text-anchor="middle">K</text>
+                <rect x="210" y="126" width="60" height="28" rx="6" fill="rgba(13,13,13,0.04)" stroke="rgba(13,13,13,0.15)"/>
+                <text x="240" y="144" text-anchor="middle">V</text>
+              </g>
+
+              <!-- attention matrix 3x3 -->
+              <g transform="translate(310,46)">
+                <text x="0" y="-4" font-family="Geist Mono, monospace" font-size="10" fill="#6b6b6b" letter-spacing="1">attention weights</text>
+                <g>
+                  <rect x="0"  y="0"  width="36" height="36" rx="3" fill="rgba(24,226,153,0.8)">
+                    <animate attributeName="opacity" values="0.6;1;0.6" dur="2.2s" repeatCount="indefinite"/>
+                  </rect>
+                  <rect x="40" y="0"  width="36" height="36" rx="3" fill="rgba(24,226,153,0.15)">
+                    <animate attributeName="fill-opacity" values="0.15;0.55;0.15" dur="2.6s" begin="0.2s" repeatCount="indefinite"/>
+                  </rect>
+                  <rect x="80" y="0"  width="36" height="36" rx="3" fill="rgba(24,226,153,0.10)">
+                    <animate attributeName="fill-opacity" values="0.10;0.40;0.10" dur="2.4s" begin="0.4s" repeatCount="indefinite"/>
+                  </rect>
+
+                  <rect x="0"  y="40" width="36" height="36" rx="3" fill="rgba(24,226,153,0.20)">
+                    <animate attributeName="fill-opacity" values="0.20;0.60;0.20" dur="2.5s" begin="0.3s" repeatCount="indefinite"/>
+                  </rect>
+                  <rect x="40" y="40" width="36" height="36" rx="3" fill="rgba(24,226,153,0.7)">
+                    <animate attributeName="opacity" values="0.6;1;0.6" dur="2.0s" begin="0.1s" repeatCount="indefinite"/>
+                  </rect>
+                  <rect x="80" y="40" width="36" height="36" rx="3" fill="rgba(24,226,153,0.30)">
+                    <animate attributeName="fill-opacity" values="0.30;0.70;0.30" dur="2.3s" begin="0.5s" repeatCount="indefinite"/>
+                  </rect>
+
+                  <rect x="0"  y="80" width="36" height="36" rx="3" fill="rgba(24,226,153,0.08)">
+                    <animate attributeName="fill-opacity" values="0.08;0.35;0.08" dur="2.4s" begin="0.6s" repeatCount="indefinite"/>
+                  </rect>
+                  <rect x="40" y="80" width="36" height="36" rx="3" fill="rgba(24,226,153,0.55)">
+                    <animate attributeName="fill-opacity" values="0.40;0.85;0.40" dur="2.1s" begin="0.2s" repeatCount="indefinite"/>
+                  </rect>
+                  <rect x="80" y="80" width="36" height="36" rx="3" fill="rgba(24,226,153,0.5)">
+                    <animate attributeName="opacity" values="0.5;1;0.5" dur="2.2s" begin="0.4s" repeatCount="indefinite"/>
+                  </rect>
+                </g>
+              </g>
+
+              <!-- arrows to output -->
+              <line x1="436" y1="64" x2="510" y2="64" stroke="#0d0d0d" stroke-width="1.2" fill="none" marker-end="url(#aLine)"/>
+              <text x="473" y="56" text-anchor="middle" font-family="Geist Mono, monospace" font-size="10" fill="#9a9a9a">weighted sum</text>
+
+              <g transform="translate(520,52)">
+                <circle r="18" fill="#18E299"/>
+                <text text-anchor="middle" y="5" font-family="Inter, sans-serif" font-size="12" fill="#0d0d0d" font-weight="600">z₂</text>
+                <text text-anchor="middle" y="40" font-size="10" fill="#9a9a9a" font-family="Geist Mono, monospace">new vector</text>
+              </g>
+            </svg>
+            <p class="diagram-caption">The diagonal is heavy because the cat cares most about itself. Off-diagonal weights show which other tokens contribute to its new context vector. Each layer learns its own pattern.</p>
+          </div>
+          <div class="why">
+            <span class="why-label">Why this matters</span>
+            <p><strong>Polysemy lives in attention.</strong> Without attention, <em>bank</em> and <em>river bank</em> get the same vector. With it, "river" can pull the meaning toward water by the time <em>bank</em> reaches its final layer. That's why transformer-era embeddings actually understand sentences, where earlier bag-of-words ones didn't.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- d -->
+      <div class="walk-step flip" id="step-pooling">
+        <div>
+          <span class="step-num">D · Pooling</span>
+        </div>
+        <div class="step-body">
+          <h3>Many token vectors become one sentence vector.</h3>
+          <p>
+            After the last layer, every token has its own contextual vector. To turn the sequence into a single 768-dim vector, you <em>pool</em>. Gemma uses <strong>mean pooling</strong>: each dimension is averaged across all token positions, weighted by an attention mask so padding doesn't leak in.
+          </p>
+          <p>
+            Other models do <em>CLS pooling</em> (use the first token's vector) or <em>last-token pooling</em>. Mean is usually a safe default for retrieval because every input token gets a vote.
+          </p>
+          <div class="diagram-frame" style="margin-top:18px;">
+            <svg viewBox="0 0 600 220" role="img" aria-label="Mean pooling: 7 token vectors averaged into one">
+              <!-- 7 input vectors -->
+              <g font-family="Geist Mono, monospace" font-size="11">
+                <g transform="translate(20,40)">
+                  <rect width="62" height="22" rx="5" fill="#fff" stroke="rgba(13,13,13,0.15)"/>
+                  <text x="31" y="15" text-anchor="middle">v(the₁)</text>
+                </g>
+                <g transform="translate(20,70)">
+                  <rect width="62" height="22" rx="5" fill="#fff" stroke="rgba(13,13,13,0.15)"/>
+                  <text x="31" y="15" text-anchor="middle">v(cat)</text>
+                </g>
+                <g transform="translate(20,100)">
+                  <rect width="62" height="22" rx="5" fill="#fff" stroke="rgba(13,13,13,0.15)"/>
+                  <text x="31" y="15" text-anchor="middle">v(sat)</text>
+                </g>
+                <g transform="translate(20,130)">
+                  <rect width="62" height="22" rx="5" fill="#fff" stroke="rgba(13,13,13,0.15)"/>
+                  <text x="31" y="15" text-anchor="middle">v(on)</text>
+                </g>
+                <g transform="translate(20,160)">
+                  <rect width="62" height="22" rx="5" fill="#fff" stroke="rgba(13,13,13,0.15)"/>
+                  <text x="31" y="15" text-anchor="middle">v(the₂)</text>
+                </g>
+              </g>
+              <g transform="translate(20,190)">
+                <rect width="62" height="0" rx="5" fill="none"/>
+              </g>
+
+              <!-- arrows converging -->
+              <g stroke="#0fb87a" stroke-width="1.2" fill="none">
+                <path d="M82 51 C 180 51, 220 110, 320 110" marker-end="url(#aLine)"/>
+                <path d="M82 81 C 180 81, 220 110, 320 110" marker-end="url(#aLine)"/>
+                <path d="M82 111 C 180 111, 220 110, 320 110" marker-end="url(#aLine)"/>
+                <path d="M82 141 C 180 141, 220 110, 320 110" marker-end="url(#aLine)"/>
+                <path d="M82 171 C 180 171, 220 110, 320 110" marker-end="url(#aLine)"/>
+              </g>
+
+              <!-- result -->
+              <g transform="translate(330,88)">
+                <rect width="210" height="44" rx="8" fill="rgba(24,226,153,0.10)" stroke="#18E299" stroke-width="1.5"/>
+                <text x="105" y="20" text-anchor="middle" font-family="Geist Mono, monospace" font-size="11" fill="#0d0d0d">mean( v₁, v₂, … vₙ )</text>
+                <text x="105" y="36" text-anchor="middle" font-family="Geist Mono, monospace" font-size="10" fill="#9a9a9a">one 768-dim vector</text>
+              </g>
+
+              <!-- right side: vector preview -->
+              <g transform="translate(330,150)" id="poolBarPreview"></g>
+            </svg>
+            <p class="diagram-caption">Every token votes equally. If your sentence is padded to a fixed length, mask the pads out so they don't dilute the average. The Hugging Face snippet for the Gemma embedding model does this by default.</p>
+          </div>
+          <div class="why">
+            <span class="why-label">Why this matters</span>
+            <p><strong>How you pool shapes what similarity means.</strong> Mean-pool a sentence like "Not bad" and you get something close to "Okay". Last-token-pool it and you lean toward the trailing nuance. Pick the pooling that matches your retrieval question, not the one that's easiest to implement.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- e -->
+      <div class="walk-step" id="step-cosine">
+        <div>
+          <span class="step-num">E · Cosine similarity</span>
+        </div>
+        <div class="step-body">
+          <h3>How close are two vectors? Use cosine.</h3>
+          <p>
+            Two vectors, <code>a</code> and <code>b</code>, point in roughly the same direction if the angle between them is small. Cosine similarity measures the cosine of that angle, giving a number in <code>[-1, 1]</code>. <code>1</code> means identical, <code>0</code> means orthogonal, <code>-1</code> means opposite.
+          </p>
+          <p>
+            Why not Euclidean distance? Because embeddings live on or near a hypersphere. Two long documents and two short documents can have the same Euclidean distance with very different meanings. Cosine ignores magnitude, which is what you want when comparing <em>directions</em> of meaning rather than <em>sizes</em>.
+          </p>
+          <div class="diagram-frame" style="margin-top:18px;">
+            <svg viewBox="0 0 600 260" role="img" aria-label="Cosine similarity: angle between vectors determines score">
+              <defs>
+                <marker id="cArrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+                  <path d="M0,0 L0,6 L7,3 z" fill="#0d0d0d"/>
+                </marker>
+              </defs>
+              <!-- origin -->
+              <circle cx="120" cy="200" r="3" fill="#0d0d0d"/>
+              <text x="106" y="218" font-family="Geist Mono, monospace" font-size="10" fill="#9a9a9a">origin</text>
+
+              <!-- vector A rotating -->
+              <g id="vecA" transform="rotate(0 120 200)">
+                <line x1="120" y1="200" x2="330" y2="120" stroke="#18E299" stroke-width="2" marker-end="url(#cArrow)"/>
+                <text x="240" y="150" font-family="Geist Mono, monospace" font-size="11" fill="#0fb87a">a</text>
+              </g>
+
+              <!-- vector B static -->
+              <line x1="120" y1="200" x2="270" y2="60" stroke="#0d0d0d" stroke-width="2" marker-end="url(#cArrow)"/>
+              <text x="200" y="80" font-family="Geist Mono, monospace" font-size="11" fill="#0d0d0d">b</text>
+
+              <!-- arc showing angle -->
+              <path id="angleArc" d="M 200 175 A 80 80 0 0 0 188 128" fill="none" stroke="#9a9a9a" stroke-width="1" stroke-dasharray="3 3"/>
+              <text x="210" y="148" font-family="Geist Mono, monospace" font-size="10" fill="#6b6b6b">θ</text>
+
+              <!-- similarity readout (animated) -->
+              <g transform="translate(380,90)">
+                <text x="0" y="0" font-family="Geist Mono, monospace" font-size="11" fill="#9a9a9a" letter-spacing="1">COSINE SIM</text>
+                <text id="cosReadout" x="0" y="34" font-family="Geist Mono, monospace" font-size="32" fill="#0d0d0d" font-weight="600">0.84</text>
+                <text x="0" y="56" font-family="Inter, sans-serif" font-size="12" fill="#6b6b6b">between a and b</text>
+              </g>
+
+              <!-- scale reference at bottom -->
+              <g transform="translate(380,180)">
+                <line x1="0" y1="0" x2="180" y2="0" stroke="rgba(13,13,13,0.15)"/>
+                <line x1="0" y1="-4" x2="0" y2="4" stroke="rgba(13,13,13,0.4)"/>
+                <line x1="60" y1="-4" x2="60" y2="4" stroke="rgba(13,13,13,0.4)"/>
+                <line x1="120" y1="-4" x2="120" y2="4" stroke="rgba(13,13,13,0.4)"/>
+                <line x1="180" y1="-4" x2="180" y2="4" stroke="rgba(13,13,13,0.4)"/>
+                <text x="0"   y="20" font-family="Geist Mono, monospace" font-size="10" fill="#9a9a9a">-1</text>
+                <text x="60"  y="20" font-family="Geist Mono, monospace" font-size="10" fill="#9a9a9a" text-anchor="middle">0</text>
+                <text x="180" y="20" font-family="Geist Mono, monospace" font-size="10" fill="#9a9a9a" text-anchor="end">1</text>
+              </g>
+            </svg>
+            <p class="diagram-caption">The angle sweeps. The cosine readout updates. Watch what "close" really means: not closeness in space, but alignment in direction.</p>
+          </div>
+          <div class="why">
+            <span class="why-label">Why this matters</span>
+            <p><strong>Retrieval runs on cosine.</strong> Pick the top-k nearest neighbors by cosine similarity over your corpus and you have a search engine. Cosine + a vector index (FAISS, ScaNN, Pinecone) is the whole recipe behind every modern RAG system.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- f -->
+      <div class="walk-step flip" id="step-matryoshka">
+        <div>
+          <span class="step-num">F · Matryoshka (the Gemma twist)</span>
+        </div>
+        <div class="step-body">
+          <h3>Use the first 64 dims, or the first 768, your choice.</h3>
+          <p>
+            Standard embedding models force you to use the full 768 dimensions. Gemma is trained with <em>Matryoshka Representation Learning</em>: the model is taught to put the most useful signal in the first 64 dimensions, then layer the next 128, then 256, all the way to 768. You can truncate at any prefix and still get something useful.
+          </p>
+          <p>
+            Use 64 dims for cheap retrieval over millions of vectors. Use 768 for accurate reranking. The model is one checkpoint, and the engineering tradeoff is now yours.
+          </p>
+          <div class="diagram-frame" style="margin-top:18px;">
+            <svg viewBox="0 0 600 240" role="img" aria-label="Matryoshka: nested dim prefixes 64 / 128 / 256 / 768">
+              <!-- 4 nested bars -->
+              <g transform="translate(60,40)">
+                <rect x="0" y="0" width="480" height="24" rx="3" fill="rgba(24,226,153,0.85)" stroke="rgba(13,13,13,0.10)"/>
+                <text x="10" y="16" font-family="Geist Mono, monospace" font-size="10" fill="#0d0d0d">dim 1-64 · fast retrieval</text>
+              </g>
+              <g transform="translate(60,74)">
+                <rect x="0" y="0" width="480" height="24" rx="3" fill="rgba(24,226,153,0.75)" stroke="rgba(13,13,13,0.10)"/>
+                <text x="10" y="16" font-family="Geist Mono, monospace" font-size="10" fill="#0d0d0d">dim 1-128 · rerank stage 1</text>
+              </g>
+              <g transform="translate(60,108)">
+                <rect x="0" y="0" width="480" height="24" rx="3" fill="rgba(24,226,153,0.65)" stroke="rgba(13,13,13,0.10)"/>
+                <text x="10" y="16" font-family="Geist Mono, monospace" font-size="10" fill="#0d0d0d">dim 1-256 · rerank stage 2</text>
+              </g>
+              <g transform="translate(60,142)">
+                <rect x="0" y="0" width="480" height="24" rx="3" fill="rgba(24,226,153,0.55)" stroke="rgba(13,13,13,0.10)"/>
+                <text x="10" y="16" font-family="Geist Mono, monospace" font-size="10" fill="#0d0d0d">dim 1-768 · full precision</text>
+              </g>
+
+              <!-- crop cursor -->
+              <g id="mCursor" transform="translate(540,40)">
+                <line x1="0" y1="-6" x2="0" y2="180" stroke="#ff5b5b" stroke-width="1.5"/>
+                <polygon points="-5,-6 5,-6 0,2" fill="#ff5b5b"/>
+                <polygon points="-5,180 5,180 0,172" fill="#ff5b5b"/>
+                <text x="10" y="98" font-family="Geist Mono, monospace" font-size="10" fill="#ff5b5b">crop @ 256</text>
+              </g>
+
+              <!-- tier markers under -->
+              <g transform="translate(60,180)" font-family="Geist Mono, monospace" font-size="10" fill="#9a9a9a">
+                <line x1="0" y1="0" x2="480" y2="0" stroke="rgba(13,13,13,0.15)"/>
+                <line x1="40" y1="-4" x2="40" y2="4" stroke="rgba(13,13,13,0.4)"/>   <text x="40" y="20" text-anchor="middle">64</text>
+                <line x1="80" y1="-4" x2="80" y2="4" stroke="rgba(13,13,13,0.4)"/>   <text x="80" y="20" text-anchor="middle">128</text>
+                <line x1="160" y1="-4" x2="160" y2="4" stroke="rgba(13,13,13,0.4)"/>  <text x="160" y="20" text-anchor="middle">256</text>
+                <line x1="480" y1="-4" x2="480" y2="4" stroke="rgba(13,13,13,0.4)"/> <text x="480" y="20" text-anchor="end">768</text>
+              </g>
+            </svg>
+            <p class="diagram-caption">Truncate anywhere. The first 64 dims are already useful because the model was trained to make them so. No retraining, no second embedding model.</p>
+          </div>
+          <div class="why">
+            <span class="why-label">Why this matters</span>
+            <p><strong>Matryoshka changes your storage math.</strong> Indexing 100M chunks at 64 dims is roughly 8x cheaper than at 512. For most production retrieval workloads, the 256-dim prefix is the sweet spot between recall and cost.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- helper: pooling comparison -->
+      <div class="walk-step flip" id="step-pooling-compare">
+        <div>
+          <span class="step-num">D.2 · Pooling, compared</span>
+        </div>
+        <div class="step-body">
+          <h3>Three pooling strategies, three different sentences.</h3>
+          <p>
+            Same input, three poolers, three vectors. Mean pooling averages all token positions into one vector. CLS pooling grabs the special classification token's final vector. Last-token pooling grabs the final token, which under causal masking is the only token that has seen everything to its left.
+          </p>
+          <p>
+            The right one depends on your model. BERT-family models expect CLS pooling; decoder-only LLaMA-family models often prefer last-token. Gemma's own embedding model uses mean pooling, masked to ignore padding, which is what you get from the Hugging Face checkpoint by default.
+          </p>
+          <div class="diagram-frame" style="margin-top:18px;">
+            <svg viewBox="0 0 600 240" role="img" aria-label="Pooling strategies comparison: mean / CLS / last-token">
+              <defs>
+                <marker id="pArrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+                  <path d="M0,0 L0,6 L7,3 z" fill="#0d0d0d"/>
+                </marker>
+              </defs>
+
+              <!-- shared input: 5 token vectors -->
+              <g transform="translate(20,90)" font-family="Geist Mono, monospace" font-size="11">
+                <g><rect width="48" height="20" rx="4" fill="#fff" stroke="rgba(13,13,13,0.15)"/><text x="24" y="14" text-anchor="middle">t1</text></g>
+                <g transform="translate(52,0)"><rect width="48" height="20" rx="4" fill="#fff" stroke="rgba(13,13,13,0.15)"/><text x="24" y="14" text-anchor="middle">t2</text></g>
+                <g transform="translate(104,0)"><rect width="48" height="20" rx="4" fill="#fff" stroke="rgba(13,13,13,0.15)"/><text x="24" y="14" text-anchor="middle">t3</text></g>
+                <g transform="translate(156,0)"><rect width="48" height="20" rx="4" fill="#fff" stroke="rgba(13,13,13,0.15)"/><text x="24" y="14" text-anchor="middle">t4</text></g>
+                <g transform="translate(208,0)"><rect width="48" height="20" rx="4" fill="rgba(24,226,153,0.30)" stroke="#18E299" stroke-width="1.5"/><text x="24" y="14" text-anchor="middle" font-weight="600">t5</text></g>
+                <text x="0" y="40" font-size="10" fill="#9a9a9a" font-family="Geist Mono, monospace">tokens →</text>
+              </g>
+
+              <!-- three branches -->
+              <!-- MEAN -->
+              <g transform="translate(20,150)" font-family="Geist Mono, monospace" font-size="11">
+                <line x1="50" y1="-40" x2="50" y2="-12" stroke="#0d0d0d" marker-end="url(#pArrow)"/>
+                <rect x="0" y="0" width="100" height="32" rx="6" fill="rgba(24,226,153,0.12)" stroke="#18E299"/>
+                <text x="50" y="20" text-anchor="middle" fill="#0d0d0d" font-weight="600">mean</text>
+                <text x="50" y="50" text-anchor="middle" font-size="9" fill="#9a9a9a">avg all tokens</text>
+              </g>
+
+              <!-- CLS -->
+              <g transform="translate(140,150)" font-family="Geist Mono, monospace" font-size="11">
+                <line x1="-90" y1="-40" x2="-50" y2="-12" stroke="#0d0d0d" marker-end="url(#pArrow)"/>
+                <rect x="-90" y="0" width="100" height="32" rx="6" fill="rgba(13,13,13,0.06)" stroke="rgba(13,13,13,0.30)"/>
+                <text x="-40" y="20" text-anchor="middle" fill="#0d0d0d" font-weight="600">[CLS]</text>
+                <text x="-40" y="50" text-anchor="middle" font-size="9" fill="#9a9a9a">first token only</text>
+              </g>
+
+              <!-- LAST -->
+              <g transform="translate(260,150)" font-family="Geist Mono, monospace" font-size="11">
+                <line x1="30" y1="-40" x2="50" y2="-12" stroke="#0d0d0d" marker-end="url(#pArrow)"/>
+                <rect x="0" y="0" width="100" height="32" rx="6" fill="rgba(245,166,35,0.16)" stroke="#f5a623"/>
+                <text x="50" y="20" text-anchor="middle" fill="#0d0d0d" font-weight="600">last</text>
+                <text x="50" y="50" text-anchor="middle" font-size="9" fill="#9a9a9a">final token</text>
+              </g>
+
+              <!-- arrow to comparison rows -->
+              <line x1="100" y1="180" x2="320" y2="180" stroke="rgba(13,13,13,0.20)" stroke-dasharray="3 3"/>
+
+              <g transform="translate(330,80)" font-family="Geist Mono, monospace" font-size="11">
+                <text x="0" y="0" font-size="10" letter-spacing="1" fill="#9a9a9a">PICKER</text>
+                <g transform="translate(0,14)">
+                  <rect width="240" height="24" rx="5" fill="rgba(24,226,153,0.10)" stroke="#18E299"/>
+                  <text x="10" y="16" fill="#0d0d0d">Gemma → mean</text>
+                  <text x="230" y="16" text-anchor="end" fill="#0fb87a" font-weight="600">✓</text>
+                </g>
+                <g transform="translate(0,46)">
+                  <rect width="240" height="24" rx="5" fill="#fff" stroke="rgba(13,13,13,0.15)"/>
+                  <text x="10" y="16" fill="#0d0d0d">BERT → [CLS]</text>
+                  <text x="230" y="16" text-anchor="end" fill="#9a9a9a">✓</text>
+                </g>
+                <g transform="translate(0,78)">
+                  <rect width="240" height="24" rx="5" fill="#fff" stroke="rgba(13,13,13,0.15)"/>
+                  <text x="10" y="16" fill="#0d0d0d">LLaMA-decoder → last</text>
+                  <text x="230" y="16" text-anchor="end" fill="#9a9a9a">✓</text>
+                </g>
+              </g>
+            </svg>
+            <p class="diagram-caption">Pooling is a model-family decision more than a personal preference. Match what the model was trained for, then your vectors behave like the paper says.</p>
+          </div>
+          <div class="why">
+            <span class="why-label">Why this matters</span>
+            <p><strong>Wrong pooler throws away the model's signal.</strong> Running mean-pool over a decoder-only model that was fine-tuned with last-token pooling won't fail loudly; it will just quietly rank your documents worse. Always check the model's card or config before you wire it up.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- helper: contrastive training diagram -->
+      <div class="walk-step" id="step-contrastive">
+        <div>
+          <span class="step-num">F.2 · How it's trained</span>
+        </div>
+        <div class="step-body">
+          <h3>The geometry is learned, not given.</h3>
+          <p>
+            Embedding models are trained with <em>contrastive learning</em>: pairs of texts that should be near each other are pulled together, pairs that should be far apart are pushed apart. For Gemma, the positive pairs are paraphrases, queries with their answers, and similar documents mined from the training corpus. Negatives are sampled from the rest of the batch.
+          </p>
+          <p>
+            Each step of training is basically saying: <em>"make these two sentences closer in vector space than these other ten."</em> Repeat a trillion times and you have an embedding model that knows what humans mean by similar.
+          </p>
+          <div class="diagram-frame" style="margin-top:18px;">
+            <svg viewBox="0 0 600 240" role="img" aria-label="Contrastive training: anchor pairs with positives and negatives">
+              <defs>
+                <marker id="ctPull" markerWidth="10" markerHeight="10" refX="6" refY="3" orient="auto">
+                  <path d="M0,0 L0,6 L9,3 z" fill="#0fb87a"/>
+                </marker>
+                <marker id="ctPush" markerWidth="10" markerHeight="10" refX="6" refY="3" orient="auto">
+                  <path d="M0,0 L0,6 L9,3 z" fill="#ff5b5b"/>
+                </marker>
+              </defs>
+
+              <!-- anchor dot -->
+              <circle cx="300" cy="120" r="14" fill="#0d0d0d"/>
+              <text x="300" y="124" text-anchor="middle" font-family="Inter, sans-serif" font-size="10" fill="#fff" font-weight="600">A</text>
+              <text x="300" y="156" text-anchor="middle" font-family="Geist Mono, monospace" font-size="10" fill="#6b6b6b">anchor</text>
+
+              <!-- positives -->
+              <circle cx="200" cy="80"  r="11" fill="rgba(24,226,153,0.30)" stroke="#18E299" stroke-width="1.5"/>
+              <text x="200" y="84" text-anchor="middle" font-family="Inter, sans-serif" font-size="9" fill="#0d0d0d" font-weight="600">P</text>
+              <text x="200" y="60" text-anchor="middle" font-family="Geist Mono, monospace" font-size="9" fill="#0fb87a">+</text>
+
+              <circle cx="380" cy="160" r="11" fill="rgba(24,226,153,0.30)" stroke="#18E299" stroke-width="1.5"/>
+              <text x="380" y="164" text-anchor="middle" font-family="Inter, sans-serif" font-size="9" fill="#0d0d0d" font-weight="600">P</text>
+              <text x="380" y="186" text-anchor="middle" font-family="Geist Mono, monospace" font-size="9" fill="#0fb87a">+</text>
+
+              <!-- negatives -->
+              <circle cx="100" cy="180" r="11" fill="rgba(255,91,91,0.15)" stroke="#ff5b5b" stroke-width="1.2"/>
+              <text x="100" y="184" text-anchor="middle" font-family="Inter, sans-serif" font-size="9" fill="#0d0d0d" font-weight="600">N</text>
+              <text x="100" y="206" text-anchor="middle" font-family="Geist Mono, monospace" font-size="9" fill="#ff5b5b">−</text>
+
+              <circle cx="500" cy="60" r="11" fill="rgba(255,91,91,0.15)" stroke="#ff5b5b" stroke-width="1.2"/>
+              <text x="500" y="64" text-anchor="middle" font-family="Inter, sans-serif" font-size="9" fill="#0d0d0d" font-weight="600">N</text>
+              <text x="500" y="46" text-anchor="middle" font-family="Geist Mono, monospace" font-size="9" fill="#ff5b5b">−</text>
+
+              <circle cx="510" cy="200" r="11" fill="rgba(255,91,91,0.15)" stroke="#ff5b5b" stroke-width="1.2"/>
+              <text x="510" y="204" text-anchor="middle" font-family="Inter, sans-serif" font-size="9" fill="#0d0d0d" font-weight="600">N</text>
+              <text x="510" y="226" text-anchor="middle" font-family="Geist Mono, monospace" font-size="9" fill="#ff5b5b">−</text>
+
+              <!-- arrows -->
+              <line x1="289" y1="112" x2="212" y2="89" stroke="#0fb87a" stroke-width="1.5" marker-end="url(#ctPull)" stroke-dasharray="3 4">
+                <animate attributeName="stroke-dashoffset" from="0" to="-14" dur="1.4s" repeatCount="indefinite"/>
+              </line>
+              <line x1="310" y1="128" x2="370" y2="153" stroke="#0fb87a" stroke-width="1.5" marker-end="url(#ctPull)" stroke-dasharray="3 4">
+                <animate attributeName="stroke-dashoffset" from="0" to="-14" dur="1.6s" begin="0.3s" repeatCount="indefinite"/>
+              </line>
+              <line x1="288" y1="130" x2="110" y2="175" stroke="#ff5b5b" stroke-width="1.2" marker-end="url(#ctPush)" stroke-dasharray="3 4">
+                <animate attributeName="stroke-dashoffset" from="0" to="-14" dur="1.5s" begin="0.6s" repeatCount="indefinite"/>
+              </line>
+              <line x1="312" y1="110" x2="490" y2="68"  stroke="#ff5b5b" stroke-width="1.2" marker-end="url(#ctPush)" stroke-dasharray="3 4">
+                <animate attributeName="stroke-dashoffset" from="0" to="-14" dur="1.7s" begin="0.9s" repeatCount="indefinite"/>
+              </line>
+              <line x1="312" y1="130" x2="498" y2="192" stroke="#ff5b5b" stroke-width="1.2" marker-end="url(#ctPush)" stroke-dasharray="3 4">
+                <animate attributeName="stroke-dashoffset" from="0" to="-14" dur="1.4s" begin="1.2s" repeatCount="indefinite"/>
+              </line>
+            </svg>
+            <p class="diagram-caption">Each training step is a tiny rearrangement: positives slide inward, negatives slide outward. The trick is sampling enough hard negatives that the model doesn't get lazy.</p>
+          </div>
+          <div class="why">
+            <span class="why-label">Why this matters</span>
+            <p><strong>Embedding quality rides on the data.</strong> Pretraining data, hard-negative mining, and the choice of contrastive loss are the levers that turn a generic transformer into a useful embedding model. Most "embedding quality" wins come from rebuilding the data pipeline, not the architecture.</p>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================= -->
+<!-- COMMON CONFUSIONS                                             -->
+<!-- ============================================================= -->
+<section style="background: var(--bg-soft); border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule);" id="confusions">
+  <div class="wrap">
+    <div class="section-head">
+      <span class="label">Common confusions</span>
+      <h2>Four things people get wrong about embeddings</h2>
+      <p class="lede">Each card carries one common belief, then the version that holds up under pressure.</p>
+    </div>
+
+    <div class="confusions">
+      <div class="conf-card">
+        <span class="n">01</span>
+        <p class="wrong">"Embeddings are the same thing as an LLM's internal hidden states, so we can just extract them from any model."</p>
+        <p class="right">Gemma's <em>embedding</em> model is a separate checkpoint from the Gemma <em>generative</em> model. It's been fine-tuned specifically so the pooled vector has geometric meaning. Pulling hidden states out of a generative model gives you something, but it isn't designed to be retrieved against. The training objective is the difference.</p>
+      </div>
+      <div class="conf-card">
+        <span class="n">02</span>
+        <p class="wrong">"Bigger embeddings always beat smaller ones, so just use 3072 dims and you'll be fine."</p>
+        <p class="right">Dim count is one knob among several. Larger dim means more storage, slower ANN search, and diminishing returns. For most retrieval problems, 256-768 is the practical sweet spot. Going higher helps mostly when the corpus is huge and the queries are very ambiguous.</p>
+      </div>
+      <div class="conf-card">
+        <span class="n">03</span>
+        <p class="wrong">"king - man + woman = queen, so embeddings encode literal analogical arithmetic."</p>
+        <p class="right">The famous Word2Vec example works on a handful of vectors with a lot of cherry-picking. Modern transformer embeddings don't reliably do analogy by arithmetic. They're trained for similarity, not for symbolic manipulation. If you want reasoning, run a generative model on the retrieved context.</p>
+      </div>
+      <div class="conf-card">
+        <span class="n">04</span>
+        <p class="wrong">"A pretrained embedding model works for any domain out of the box."</p>
+        <p class="right">Out-of-the-box Gemma embeddings are excellent for general English. For specialized domains (legal, medical, code, scientific literature), fine-tuning on a small in-domain contrastive dataset usually improves retrieval quality by 5-15%. The pretraining is a foundation, not a finished tool.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================= -->
+<!-- WHERE TO GO NEXT                                              -->
+<!-- ============================================================= -->
+<section id="next">
+  <div class="wrap">
+    <div class="section-head">
+      <span class="label">Where to go next</span>
+      <h2>Three concrete follow-ons</h2>
+      <p class="lede">Specific resources, in order from theoretical to hands-on.</p>
+    </div>
+
+    <div class="next-grid">
+      <a class="next-card" href="https://arxiv.org/abs/2509.15454" target="_blank" rel="noopener">
+        <span class="kind">Paper</span>
+        <h4>Gemma Embedding Technical Report</h4>
+        <p>The full description of the training data, the Matryoshka objective, and the evaluation benchmarks. Heavy on detail, light on hype.</p>
+        <span class="arrow">arxiv.org →</span>
+      </a>
+      <a class="next-card" href="https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2" target="_blank" rel="noopener">
+        <span class="kind">Model</span>
+        <h4>all-MiniLM-L6-v2</h4>
+        <p>Older, smaller (22M params, 384 dims), great for prototypes where Gemma is overkill. Good baseline to compare against.</p>
+        <span class="arrow">huggingface.co →</span>
+      </a>
+      <a class="next-card" href="https://sbert.org/docs/" target="_blank" rel="noopener">
+        <span class="kind">Library</span>
+        <h4>sentence-transformers docs</h4>
+        <p>The Python library most teams reach for first. Loading the model, computing embeddings, and running similarity in one short snippet.</p>
+        <span class="arrow">sbert.org →</span>
+      </a>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================= -->
+<!-- FOOTER                                                        -->
+<!-- ============================================================= -->
+<footer>
+  <div class="wrap">
+    <span class="series">Day 1 / Series</span>
+    <p style="margin:6px 0 0;">Day 1 of the explainer series. Built by Hermes using the explainer-builder skill.</p>
+  </div>
+</footer>
+
+<!-- ============================================================= -->
+<!-- SCRIPTS: diagrams-only, no framework                           -->
+<!-- ============================================================= -->
+<script>
+(function () {
+  const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  // ---------- 768-dim bar (mental model) ----------
+  const bar = document.getElementById('vectorBar');
+  if (bar) {
+    const W = 230, H = 18, N = 768, cellW = W / N;
+    for (let i = 0; i < N; i++) {
+      const r = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+      const v = Math.sin(i * 0.91) * 0.5 + Math.cos(i * 0.21) * 0.4 + (Math.random() - 0.5) * 0.2;
+      let fill = 'var(--near)';
+      if (v > 0.04) fill = 'var(--pos)';
+      else if (v < -0.04) fill = 'var(--neg)';
+      r.setAttribute('x', i * cellW);
+      r.setAttribute('y', 0);
+      r.setAttribute('width', cellW - 0.05);
+      r.setAttribute('height', H);
+      r.setAttribute('fill', fill);
+      r.setAttribute('opacity', '0');
+      r.style.transition = 'opacity 80ms linear';
+      r.dataset.idx = i;
+      bar.appendChild(r);
+    }
+    // baseline axis
+    const axis = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    axis.setAttribute('x1', 0); axis.setAttribute('x2', W);
+    axis.setAttribute('y1', H / 2); axis.setAttribute('y2', H / 2);
+    axis.setAttribute('stroke', 'rgba(13,13,13,0.25)');
+    axis.setAttribute('stroke-dasharray', '2 3');
+    bar.appendChild(axis);
+
+    const tickL = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    tickL.setAttribute('x', 0); tickL.setAttribute('y', H + 14);
+    tickL.setAttribute('font-family', 'Geist Mono, monospace'); tickL.setAttribute('font-size', '9');
+    tickL.setAttribute('fill', '#9a9a9a'); tickL.textContent = '-1';
+    bar.appendChild(tickL);
+    const tickR = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    tickR.setAttribute('x', W); tickR.setAttribute('y', H + 14);
+    tickR.setAttribute('text-anchor', 'end');
+    tickR.setAttribute('font-family', 'Geist Mono, monospace'); tickR.setAttribute('font-size', '9');
+    tickR.setAttribute('fill', '#9a9a9a'); tickR.textContent = '+1';
+    bar.appendChild(tickR);
+
+    const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    label.setAttribute('x', W / 2); label.setAttribute('y', H + 28);
+    label.setAttribute('text-anchor', 'middle');
+    label.setAttribute('font-family', 'Geist Mono, monospace'); label.setAttribute('font-size', '9');
+    label.setAttribute('fill', '#9a9a9a'); label.textContent = '1 cell = 1 dimension (out of 768)';
+    bar.appendChild(label);
+
+    // animate cells on
+    if (!reduce) {
+      let i = 0;
+      const step = () => {
+        const r = bar.querySelector(`rect[data-idx="${i}"]`);
+        if (r) r.setAttribute('opacity', '1');
+        i++;
+        if (i < N) setTimeout(step, 4);
+      };
+      const startOnce = () => {
+        const r = bar.getBoundingClientRect();
+        if (r.top < window.innerHeight) { setTimeout(step, 800); return true; }
+        return false;
+      };
+      if (!startOnce()) {
+        const onScroll = () => { if (startOnce()) window.removeEventListener('scroll', onScroll); };
+        window.addEventListener('scroll', onScroll, { passive: true });
+      }
+    } else {
+      bar.querySelectorAll('rect').forEach(r => r.setAttribute('opacity', '1'));
+    }
+  }
+
+  // ---------- pool bar preview ----------
+  const pbp = document.getElementById('poolBarPreview');
+  if (pbp) {
+    const W = 210, H = 8, N = 80;
+    for (let i = 0; i < N; i++) {
+      const r = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+      const v = Math.sin(i * 0.7) * 0.5 + (Math.random() - 0.5) * 0.2;
+      let fill = 'var(--near)';
+      if (v > 0.05) fill = 'var(--pos)';
+      else if (v < -0.05) fill = 'var(--neg)';
+      r.setAttribute('x', i * (W / N));
+      r.setAttribute('y', 0);
+      r.setAttribute('width', (W / N) - 0.1);
+      r.setAttribute('height', H);
+      r.setAttribute('fill', fill);
+      pbp.appendChild(r);
+    }
+  }
+
+  // ---------- token splits animation ----------
+  if (!reduce) {
+    const inputEl = document.getElementById('inputText');
+    const text = inputEl ? inputEl.textContent : 'The cat sat on the mat';
+    const chips = document.querySelectorAll('#tokensBox .token-chip');
+    const textToWords = text.split(' ');
+    let idx = 0;
+
+    const revealWord = () => {
+      if (idx >= chips.length) return;
+      const word = textToWords[idx];
+      const txt = chips[idx].querySelector('text');
+      const rect = chips[idx].querySelector('rect');
+      if (rect) {
+        rect.style.transition = 'all 250ms ease-out';
+        rect.setAttribute('fill', 'rgba(24,226,153,0.18)');
+      }
+      if (txt) {
+        txt.textContent = word;
+        txt.style.fontWeight = '500';
+      }
+      idx++;
+      setTimeout(revealWord, 220);
+    };
+    setTimeout(revealWord, 600);
+  } else {
+    // show all words immediately
+    document.querySelectorAll('#tokensBox .token-chip').forEach((c, i) => {
+      const txt = c.querySelector('text');
+      const ws = (document.getElementById('inputText')?.textContent || 'The cat sat on the mat').split(' ');
+      if (txt && ws[i]) txt.textContent = ws[i];
+    });
+  }
+
+  // ---------- transformer layer draw-in ----------
+  if (!reduce) {
+    const layers = document.querySelectorAll('#txDrawIn .lay-line');
+    let li = 0;
+    const step = () => {
+      if (li >= layers.length) return;
+      const el = layers[li];
+      el.style.opacity = '1';
+      el.style.transition = 'opacity 220ms ease-out';
+      li++;
+      setTimeout(step, 180);
+    };
+    const startTx = () => {
+      const r = document.getElementById('txDrawIn').getBoundingClientRect();
+      if (r.top < window.innerHeight * 0.85) { setTimeout(step, 1400); return true; }
+      return false;
+    };
+    if (!startTx()) {
+      const onScroll = () => { if (startTx()) window.removeEventListener('scroll', onScroll); };
+      window.addEventListener('scroll', onScroll, { passive: true });
+    }
+  } else {
+    document.querySelectorAll('#txDrawIn .lay-line').forEach(el => el.style.opacity = '1');
+  }
+
+  // ---------- cosine rotation ----------
+  if (!reduce) {
+    const vecA = document.getElementById('vecA');
+    const readout = document.getElementById('cosReadout');
+    if (vecA && readout) {
+      // b is at angle ~64° from positive x (atan2(140,150))
+      const bx = 270 - 120, by = -(60 - 200);
+      const bAngle = Math.atan2(by, bx); // ~ 1.039 rad, approx 60°
+      let t = 0;
+      const tick = () => {
+        t += 0.012;
+        const aAngle = -0.5 + t * 0.7;
+        vecA.setAttribute('transform', `rotate(${aAngle * 180 / Math.PI} 120 200)`);
+        const cos = Math.cos(aAngle - bAngle);
+        readout.textContent = cos.toFixed(2);
+        if (t < 6) requestAnimationFrame(tick);
+      };
+      const startOnce = () => {
+        const r = document.getElementById('cosReadout').getBoundingClientRect();
+        if (r.top < window.innerHeight * 0.9) { requestAnimationFrame(tick); return true; }
+        return false;
+      };
+      if (!startOnce()) {
+        const onScroll = () => { if (startOnce()) window.removeEventListener('scroll', onScroll); };
+        window.addEventListener('scroll', onScroll, { passive: true });
+      }
+    }
+  }
+
+  // ---------- matryoshka crop sweep ----------
+  if (!reduce) {
+    const cursor = document.getElementById('mCursor');
+    if (cursor) {
+      let t = 0;
+      const tick = () => {
+        t += 0.005;
+        const x = 60 + (60 + Math.sin(t * 0.8) * 0.5 + 0.5) * (480 - 60);
+        cursor.setAttribute('transform', `translate(${x - 540}, 40)`);
+        if (t < 6) requestAnimationFrame(tick);
+      };
+      const startOnce = () => {
+        const r = cursor.getBoundingClientRect();
+        if (r.top < window.innerHeight * 0.9) { requestAnimationFrame(tick); return true; }
+        return false;
+      };
+      if (!startOnce()) {
+        const onScroll = () => { if (startOnce()) window.removeEventListener('scroll', onScroll); };
+        window.addEventListener('scroll', onScroll, { passive: true });
+      }
+    }
+  }
+})();
+</script>
+
+</body>
+</html>
