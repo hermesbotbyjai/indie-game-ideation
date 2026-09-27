@@ -1,0 +1,846 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="theme-color" content="#0b0d10">
+<title>Fifteen Rounds — Play</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0b0d10; --panel:#15191f; --line:#252d38;
+    --text:#e6ebf2; --muted:#8a93a3;
+    --red:#e74c3c; --red-glow:rgba(231,76,60,.55);
+    --gold:#d4af37;
+    --safe-t:env(safe-area-inset-top);
+    --safe-b:env(safe-area-inset-bottom);
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font-family:'Inter',system-ui,-apple-system,Segoe UI,Roboto,sans-serif;overflow-x:hidden}
+  body{min-height:100vh;min-height:100svh;padding-top:var(--safe-t);padding-bottom:var(--safe-b)}
+  button{font-family:inherit}
+
+  /* Layout */
+  .app{max-width:480px;margin:0 auto;min-height:100vh;min-height:100svh;display:flex;flex-direction:column;padding:10px 12px 14px;gap:8px}
+  header.bar{display:flex;align-items:center;justify-content:space-between;gap:8px}
+  .pill{background:var(--panel);border:1px solid var(--line);border-radius:999px;padding:8px 14px;font-weight:700;letter-spacing:.04em;font-size:.85rem;display:inline-flex;align-items:center;gap:8px;min-height:36px}
+  .pill .lbl{color:var(--muted);font-weight:600;text-transform:uppercase;font-size:.7rem;letter-spacing:.1em}
+  .icon-btn{background:var(--panel);border:1px solid var(--line);color:var(--text);width:44px;height:44px;border-radius:12px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;font-size:1rem}
+  .icon-btn:active{transform:scale(.96)}
+
+  /* Turn banner */
+  .turn{flex:0 0 auto;background:linear-gradient(180deg,var(--panel),#10141a);border:1px solid var(--line);border-radius:14px;padding:10px 14px;text-align:center;font-weight:700;letter-spacing:.06em;text-transform:uppercase;font-size:.9rem}
+  .turn.you{box-shadow:inset 0 0 0 1px rgba(231,76,60,.35)}
+  .turn.dealer{box-shadow:inset 0 0 0 1px rgba(212,175,55,.35)}
+  .turn .who{color:var(--red)}
+  .turn.dealer .who{color:var(--gold)}
+
+  /* Opponent panel */
+  .opponent{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:12px;display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:12px}
+  .avatar{width:54px;height:54px;border-radius:50%;background:radial-gradient(circle at 30% 30%,#2a3340,#11151b);display:flex;align-items:center;justify-content:center;font-weight:900;font-size:1.2rem;color:var(--gold);border:1px solid var(--line)}
+  .avatar.dealer{color:var(--gold)}
+  .meta{min-width:0}
+  .name{font-weight:700;letter-spacing:.04em;text-transform:uppercase;font-size:.85rem}
+  .hp{display:flex;gap:6px;margin-top:6px}
+  .slot{width:18px;height:18px;border-radius:50%;background:#1c222b;border:1px solid #2a323e;display:inline-flex;align-items:center;justify-content:center;color:#2a323e;font-size:.7rem}
+  .slot.on{background:var(--red);color:#fff;border-color:#7a1f15;box-shadow:0 0 10px var(--red-glow)}
+  .shells{display:flex;gap:5px;flex-wrap:wrap;justify-content:flex-end;max-width:160px}
+  .shell{width:14px;height:22px;border-radius:3px;background:linear-gradient(180deg,#c9b27a,#8b7741);border:1px solid #5a4d28;position:relative;box-shadow:inset 0 -3px 0 rgba(0,0,0,.35)}
+  .shell::after{content:"";position:absolute;left:0;right:0;top:0;height:5px;background:#3a2f17;border-radius:3px 3px 0 0}
+  .shell.eject{animation:slideOut .35s ease-out forwards}
+  @keyframes slideOut{0%{transform:translateY(0);opacity:1}100%{transform:translateY(20px);opacity:0}}
+
+  /* Player panel */
+  .player{background:linear-gradient(180deg,var(--panel),#10141a);border:1px solid var(--line);border-radius:14px;padding:12px;display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:12px}
+  .avatar.player{color:var(--red)}
+
+  /* Hands (items) */
+  .hand{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap}
+  .card{min-width:60px;min-height:44px;padding:8px 10px;border-radius:10px;background:#1a1f27;border:1px solid var(--line);font-size:.78rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:6px;color:var(--text);transition:transform .1s ease-out}
+  .card:active{transform:scale(.96)}
+  .card[disabled]{opacity:.45;cursor:not-allowed}
+  .card .ct{background:var(--gold);color:#1a1300;border-radius:999px;font-size:.7rem;padding:1px 7px;font-weight:800}
+  .card.back{background:repeating-linear-gradient(45deg,#1a1f27,#1a1f27 6px,#222934 6px,#222934 12px);color:var(--muted)}
+  .card.flash{animation:reveal .5s ease-out}
+  @keyframes reveal{0%{transform:scale(.85) rotate(-2deg);opacity:0}60%{transform:scale(1.05) rotate(1deg);opacity:1}100%{transform:scale(1) rotate(0);opacity:1}}
+  .card.used{opacity:.35;pointer-events:none;text-decoration:line-through}
+
+  /* Actions */
+  .actions{flex:1 1 auto;display:flex;flex-direction:column;gap:10px;justify-content:center;min-height:220px}
+  .btn{display:flex;align-items:center;justify-content:center;gap:10px;width:100%;min-height:64px;padding:0 16px;border:0;border-radius:14px;font-weight:900;font-size:1.15rem;letter-spacing:.06em;text-transform:uppercase;cursor:pointer;color:#fff;transition:transform .1s ease-out, box-shadow .15s ease-out, filter .15s}
+  .btn:focus-visible{outline:3px solid var(--gold);outline-offset:2px}
+  .btn:active{transform:scale(.96)}
+  .btn[disabled]{opacity:.45;cursor:not-allowed;filter:grayscale(.4)}
+  .btn.dealer{background:linear-gradient(180deg,#ef5b4a,#b93828);box-shadow:0 12px 28px rgba(231,76,60,.35), inset 0 1px 0 rgba(255,255,255,.18)}
+  .btn.dealer:hover:not([disabled]){box-shadow:0 16px 32px rgba(231,76,60,.5)}
+  .btn.self{background:linear-gradient(180deg,#3a4350,#232a34);color:#e6ebf2;box-shadow:inset 0 1px 0 rgba(255,255,255,.06)}
+  .btn .sub{font-weight:600;font-size:.72rem;letter-spacing:.08em;color:rgba(255,255,255,.7);text-transform:uppercase}
+  .btn.self .sub{color:#aab3c0}
+
+  /* Toast / result */
+  .stage{position:relative;flex:0 0 auto}
+  .toast{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%) scale(.92);opacity:0;pointer-events:none;background:rgba(11,13,16,.92);border:1px solid var(--line);border-radius:12px;padding:14px 22px;text-align:center;font-weight:900;letter-spacing:.04em;text-transform:uppercase;font-size:1.05rem;min-width:80%;max-width:90%;transition:opacity .2s ease, transform .25s ease}
+  .toast.show{opacity:1;transform:translate(-50%,-50%) scale(1)}
+  .toast.live{color:var(--red);text-shadow:0 0 18px var(--red-glow);border-color:rgba(231,76,60,.45)}
+  .toast.blank{color:#9bd3ff}
+  .toast.gold{color:var(--gold);text-shadow:0 0 18px rgba(212,175,55,.45);border-color:rgba(212,175,55,.45)}
+
+  /* Damage pulse + flash */
+  @keyframes shake{0%,100%{transform:translateX(0)}20%{transform:translateX(-6px)}40%{transform:translateX(6px)}60%{transform:translateX(-4px)}80%{transform:translateX(4px)}}
+  .shake{animation:shake .35s ease-out}
+  @keyframes damagePulse{0%{background:#3a0a06}100%{background:var(--panel)}}
+  .pulse{animation:damagePulse .5s ease-out}
+  .flash{position:fixed;inset:0;background:rgba(231,76,60,0);pointer-events:none;z-index:50}
+  .flash.on{animation:flashAnim .55s ease-out}
+  @keyframes flashAnim{0%{background:rgba(255,255,255,.9)}30%{background:rgba(231,76,60,.65)}100%{background:rgba(231,76,60,0)}}
+
+  /* Modal */
+  .modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.7);display:none;align-items:center;justify-content:center;z-index:60;padding:16px}
+  .modal-bg.show{display:flex}
+  .modal{background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:22px;max-width:380px;width:100%;box-shadow:0 24px 60px rgba(0,0,0,.6)}
+  .modal h2{margin:0 0 6px;font-size:1.5rem;letter-spacing:.02em}
+  .modal .verdict.win{color:var(--gold);text-shadow:0 0 18px rgba(212,175,55,.5)}
+  .modal .verdict.lose{color:var(--red);text-shadow:0 0 18px var(--red-glow)}
+  .modal .verdict.draw{color:#9bd3ff}
+  .modal .stats{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:14px 0}
+  .stat{background:#10141a;border:1px solid var(--line);border-radius:10px;padding:10px}
+  .stat .k{font-size:.7rem;color:var(--muted);text-transform:uppercase;letter-spacing:.08em}
+  .stat .v{font-size:1.15rem;font-weight:800;margin-top:2px}
+  .modal .seed{color:var(--muted);font-size:.72rem;margin-top:6px;word-break:break-all}
+  .modal .actions-row{display:flex;gap:10px;margin-top:8px}
+  .modal .actions-row .btn{min-height:48px;font-size:.95rem;border-radius:10px}
+  .modal .ghost{background:#232a34;color:var(--text)}
+
+  /* How-to screen */
+  .howto{position:fixed;inset:0;background:rgba(11,13,16,.96);z-index:70;display:none;overflow:auto;padding:24px 18px}
+  .howto.show{display:block}
+  .howto h2{margin-top:6px}
+  .howto .close{position:absolute;top:14px;right:14px;width:44px;height:44px;border-radius:12px;border:1px solid var(--line);background:var(--panel);color:var(--text);cursor:pointer;font-size:1.1rem}
+  .howto p,.howto li{color:#cdd4df;line-height:1.45}
+  .howto ul{padding-left:18px}
+  .howto code{background:#10141a;border:1px solid var(--line);padding:1px 6px;border-radius:6px;color:var(--gold)}
+
+  @media (prefers-reduced-motion:reduce){
+    .shake,.pulse,.flash.on{animation:none !important}
+    .btn,.card,.icon-btn{transition:none}
+  }
+</style>
+</head>
+<body>
+<div class="app" id="app">
+  <header class="bar">
+    <span class="pill"><span class="lbl">Round</span><span id="roundLabel">1 / 3</span></span>
+    <span class="pill"><span class="lbl">Shells</span><span id="shellLabel">0 left</span></span>
+    <button class="icon-btn" id="howBtn" aria-label="How to play" title="How to play">?</button>
+  </header>
+
+  <div class="turn dealer" id="turnBanner" aria-live="polite"><span class="who" id="turnWho">DEALER</span>'s turn</div>
+
+  <section class="opponent" id="dealerPanel" aria-label="Dealer">
+    <div class="avatar dealer" aria-hidden="true">D</div>
+    <div class="meta">
+      <div class="name">Dealer</div>
+      <div class="hp" id="dealerHp" aria-label="Dealer HP"></div>
+    </div>
+    <div class="shells" id="dealerShells" aria-label="Dealer shells"></div>
+  </section>
+
+  <section aria-label="Dealer items">
+    <div class="hand" id="dealerHand"></div>
+  </section>
+
+  <section class="player" id="playerPanel" aria-label="Player">
+    <div class="avatar player" aria-hidden="true">P</div>
+    <div class="meta">
+      <div class="name">You</div>
+      <div class="hp" id="playerHp" aria-label="Player HP"></div>
+    </div>
+    <div class="shells" id="playerShells" aria-label="Player shells"></div>
+  </section>
+
+  <section aria-label="Your items">
+    <div class="hand" id="playerHand"></div>
+  </section>
+
+  <div class="stage" style="flex:0 0 6px"></div>
+
+  <section class="actions" aria-label="Actions">
+    <button class="btn dealer" id="shootDealer" aria-label="Shoot the dealer">
+      Shoot Dealer <span class="sub">live ends your turn</span>
+    </button>
+    <button class="btn self" id="shootSelf" aria-label="Shoot yourself">
+      Shoot Yourself <span class="sub">blank = extra shot</span>
+    </button>
+  </section>
+
+  <div class="stage" aria-live="polite">
+    <div class="toast" id="toast"></div>
+  </div>
+</div>
+
+<div class="flash" id="flash" aria-hidden="true"></div>
+
+<!-- How to play -->
+<div class="howto" id="howto" role="dialog" aria-modal="true" aria-labelledby="howtoTitle">
+  <button class="close" id="howClose" aria-label="Close how to play">✕</button>
+  <h2 id="howtoTitle">How to play</h2>
+  <p>You're in a 3-round shotgun duel against the dealer. Each round, the gun loads <b>4 live</b> + <b>4 blank</b> shells (sometimes 5/3 with a ±1 twist). You always go first in round 1.</p>
+  <ul>
+    <li><b>Live → hit</b> the target, deal 1 HP, and your turn ends.</li>
+    <li><b>Blank → shoot yourself</b>: you keep the turn (chain blanks for damage).</li>
+    <li><b>Blank → shoot dealer</b>: their turn, no damage.</li>
+  </ul>
+  <p><b>Items</b> (up to 2 per side per round, unused items persist):</p>
+  <ul>
+    <li><code>Magnifier</code> — peek the current shell.</li>
+    <li><code>Handcuffs</code> — skip the opponent's next turn.</li>
+    <li><code>Cigarettes</code> — heal 1 HP (max 4).</li>
+  </ul>
+  <p>Win a round by dropping the other side to 0 HP before shells run out. If shells run out, the side with more HP wins; a tie is a draw. First to <b>2 round wins</b> takes the match.</p>
+</div>
+
+<!-- Match-end modal -->
+<div class="modal-bg" id="modalBg" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+  <div class="modal">
+    <h2 class="verdict" id="modalTitle">You win</h2>
+    <div id="modalSubtitle" style="color:var(--muted)">Match over.</div>
+    <div class="stats" id="modalStats"></div>
+    <div class="seed" id="modalSeed"></div>
+    <div class="actions-row">
+      <button class="btn dealer" id="playAgain" style="flex:1">Play Again</button>
+      <a class="btn ghost" href="index.html" style="flex:1;text-decoration:none">Home</a>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  "use strict";
+
+  // ---------- Utilities ----------
+  const $ = (id) => document.getElementById(id);
+  const clamp = (n,a,b) => Math.max(a,Math.min(b,n));
+  const rand = (n) => Math.floor(Math.random()*n);
+
+  // Seeded RNG (mulberry32) — deterministic per seed
+  function mulberry32(a){
+    return function(){
+      a |= 0; a = a + 0x6D2B79F5 | 0;
+      let t = a;
+      t = Math.imul(t ^ t >>> 15, t | 1);
+      t ^= t + Math.imul(t ^ t >>> 7, t | 61);
+      return ((t ^ t >>> 14) >>> 0) / 4294967296;
+    };
+  }
+  function rngPick(rng, arr){ return arr[Math.floor(rng()*arr.length)]; }
+
+  // ---------- Game constants ----------
+  const ITEMS = ["MAGNIFIER","HANDCUFFS","CIGARETTES"];
+  const ITEM_LABEL = {
+    MAGNIFIER:"Magnifier", HANDCUFFS:"Handcuffs", CIGARETTES:"Cigarettes"
+  };
+  const ITEM_BLURB = {
+    MAGNIFIER:"Peek shell", HANDCUFFS:"Skip next", CIGARETTES:"Heal 1"
+  };
+  const HP_MAX = 4;
+  const ROUNDS = 3;
+
+  // ---------- State ----------
+  const state = {
+    seed: 0,
+    rng: null,
+    round: 1,
+    phase: "menu", // menu | round-intro | player-turn | dealer-turn | between-shots | round-end | match-end
+    playerHP: HP_MAX,
+    dealerHP: HP_MAX,
+    shells: [],          // remaining shells queue
+    initialCount: 0,     // for stats
+    currentShell: null,  // peeked value if known
+    currentKnown: false,
+    playerItems: [],     // {type}
+    dealerItems: [],
+    playerSkipped: false,
+    dealerSkipped: false,
+    blanksChained: 0,
+    maxBlankChain: 0,
+    shotsTaken: 0,
+    itemsUsed: 0,
+    dealerAIThinking: false,
+    busy: false,
+    playerRoundWins: 0,
+    dealerRoundWins: 0,
+    drawnRounds: 0,
+  };
+
+  // ---------- DOM refs ----------
+  const els = {
+    roundLabel: $("roundLabel"),
+    shellLabel: $("shellLabel"),
+    turnBanner: $("turnBanner"),
+    turnWho: $("turnWho"),
+    dealerHp: $("dealerHp"),
+    playerHp: $("playerHp"),
+    dealerShells: $("dealerShells"),
+    playerShells: $("playerShells"),
+    dealerHand: $("dealerHand"),
+    playerHand: $("playerHand"),
+    dealerPanel: $("dealerPanel"),
+    playerPanel: $("playerPanel"),
+    shootDealer: $("shootDealer"),
+    shootSelf: $("shootSelf"),
+    toast: $("toast"),
+    flash: $("flash"),
+    modalBg: $("modalBg"),
+    modalTitle: $("modalTitle"),
+    modalSubtitle: $("modalSubtitle"),
+    modalStats: $("modalStats"),
+    modalSeed: $("modalSeed"),
+    playAgain: $("playAgain"),
+    howBtn: $("howBtn"),
+    howto: $("howto"),
+    howClose: $("howClose"),
+  };
+
+  // ---------- DOM helpers ----------
+  function hpMarkup(hp){
+    let s = "";
+    for(let i=0;i<HP_MAX;i++){
+      s += `<span class="slot${i<hp?" on":""}" aria-hidden="true">♥</span>`;
+    }
+    return s;
+  }
+  function shellMarkup(n, type){
+    if(type === "eject") return `<span class="shell eject"></span>`;
+    return `<span class="shell"></span>`;
+  }
+  function renderShells(container, n){
+    container.innerHTML = "";
+    for(let i=0;i<n;i++) container.appendChild(document.createElement("span")).className = "shell";
+  }
+  function ejectShellAnimation(container){
+    if(!container.firstChild) return;
+    const c = container.firstChild;
+    c.classList.add("eject");
+    setTimeout(()=>{ if(c.parentNode) c.remove(); }, 360);
+  }
+  function renderHands(){
+    // Player hand
+    els.playerHand.innerHTML = "";
+    if(state.playerItems.length === 0){
+      els.playerHand.innerHTML = `<span style="color:var(--muted);font-size:.85rem">No items this round.</span>`;
+    } else {
+      state.playerItems.forEach((it, idx) => {
+        const c = document.createElement("button");
+        c.className = "card";
+        c.setAttribute("role","button");
+        c.setAttribute("aria-label", `Use ${ITEM_LABEL[it.type]}`);
+        c.innerHTML = `<span>${ITEM_LABEL[it.type]}</span><span class="ct" aria-hidden="true">${ITEM_BLURB[it.type]}</span>`;
+        c.disabled = state.busy || state.phase !== "player-turn" || state.dealerSkipped;
+        c.addEventListener("click", () => usePlayerItem(idx));
+        els.playerHand.appendChild(c);
+      });
+    }
+    // Dealer hand
+    els.dealerHand.innerHTML = "";
+    if(state.dealerItems.length === 0){
+      els.dealerHand.innerHTML = `<span style="color:var(--muted);font-size:.85rem">&nbsp;</span>`;
+    } else {
+      state.dealerItems.forEach((it, idx) => {
+        const c = document.createElement("button");
+        if(it.faceUp){
+          c.className = "card flash";
+          if(it.used) c.classList.add("used");
+          c.innerHTML = `<span>${ITEM_LABEL[it.type]}</span><span class="ct" aria-hidden="true">${ITEM_BLURB[it.type]}</span>`;
+        } else {
+          c.className = "card back";
+          c.innerHTML = `<span>?</span><span class="ct" aria-hidden="true">card</span>`;
+          c.setAttribute("aria-label","Dealer hidden item");
+        }
+        c.disabled = true; // not interactive for player
+        els.dealerHand.appendChild(c);
+      });
+    }
+  }
+  function renderHP(){
+    els.dealerHp.innerHTML = hpMarkup(state.dealerHP);
+    els.playerHp.innerHTML = hpMarkup(state.playerHP);
+  }
+  function renderShellsRow(){
+    const n = state.shells.length;
+    els.shellLabel.textContent = `${n} shell${n===1?"":"s"} left`;
+    renderShells(els.dealerShells, n);
+    renderShells(els.playerShells, n);
+  }
+  function renderRoundLabel(){
+    els.roundLabel.textContent = `${state.round} / ${ROUNDS}`;
+  }
+  function renderTurn(){
+    if(state.phase === "round-end" || state.phase === "match-end" || state.phase === "menu"){
+      els.turnBanner.style.display = "none";
+      return;
+    }
+    els.turnBanner.style.display = "";
+    if(state.phase === "player-turn"){
+      els.turnBanner.classList.remove("dealer"); els.turnBanner.classList.add("you");
+      els.turnWho.textContent = "YOUR";
+    } else {
+      els.turnBanner.classList.remove("you"); els.turnBanner.classList.add("dealer");
+      els.turnWho.textContent = "DEALER";
+    }
+  }
+  function renderActions(){
+    const enabled = !state.busy && state.phase === "player-turn" && !state.dealerSkipped;
+    els.shootDealer.disabled = !enabled;
+    els.shootSelf.disabled = !enabled;
+  }
+  function renderAll(){
+    renderHP();
+    renderShellsRow();
+    renderHands();
+    renderRoundLabel();
+    renderTurn();
+    renderActions();
+  }
+
+  // ---------- Toast / flash ----------
+  function showToast(text, kind, ms){
+    els.toast.className = "toast " + (kind || "");
+    els.toast.textContent = text;
+    requestAnimationFrame(()=> els.toast.classList.add("show"));
+    clearTimeout(showToast._t);
+    showToast._t = setTimeout(()=>{
+      els.toast.classList.remove("show");
+    }, ms || 1100);
+  }
+  function flashScreen(){
+    if(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    els.flash.classList.remove("on");
+    void els.flash.offsetWidth;
+    els.flash.classList.add("on");
+    setTimeout(()=> els.flash.classList.remove("on"), 600);
+  }
+  function shake(panel){
+    panel.classList.remove("shake");
+    void panel.offsetWidth;
+    panel.classList.add("shake");
+    setTimeout(()=>panel.classList.remove("shake"), 380);
+  }
+  function damagePulse(panel){
+    panel.classList.remove("pulse");
+    void panel.offsetWidth;
+    panel.classList.add("pulse");
+    setTimeout(()=>panel.classList.remove("pulse"), 520);
+  }
+
+  // ---------- Round setup ----------
+  function buildShells(){
+    // 4 live + 4 blank, ±1 twist
+    let live = 4, blank = 4;
+    const twist = state.rng() < 0.5 ? -1 : 1;
+    if(twist === 1) live += 1; else blank += 1;
+    const arr = [];
+    for(let i=0;i<live;i++) arr.push("LIVE");
+    for(let i=0;i<blank;i++) arr.push("BLANK");
+    // Fisher-Yates with seeded RNG
+    for(let i=arr.length-1;i>0;i--){
+      const j = Math.floor(state.rng()*(i+1));
+      [arr[i],arr[j]] = [arr[j],arr[i]];
+    }
+    return arr;
+  }
+  function drawItems(count){
+    const pool = [];
+    for(let i=0;i<count;i++) pool.push(ITEMS[Math.floor(state.rng()*ITEMS.length)]);
+    return pool.map(t => ({type:t, faceUp:false, used:false}));
+  }
+  function startRound(){
+    state.phase = "round-intro";
+    state.shells = buildShells();
+    state.initialCount = state.shells.length;
+    state.currentShell = null;
+    state.currentKnown = false;
+    state.playerItems = drawItems(2);
+    state.dealerItems = drawItems(2);
+    state.playerSkipped = false;
+    state.dealerSkipped = false;
+    state.blanksChained = 0;
+    state.maxBlankChain = 0;
+    renderAll();
+    showToast(`Round ${state.round}`, "gold", 900);
+    setTimeout(()=>{
+      // Player first in round 1, otherwise alternate based on who won last round.
+      // Spec: Player always acts first in round 1; alternates thereafter.
+      // We track by last round's last actor; default start: player first.
+      // Simple: player first in odd rounds, dealer first in even rounds.
+      state.phase = (state.round % 2 === 1) ? "player-turn" : "dealer-turn";
+      if(state.phase === "dealer-turn"){
+        // mark dealer as skipped? No — they get their turn.
+        renderAll();
+        setTimeout(dealerTurn, 700);
+      } else {
+        renderAll();
+      }
+    }, 900);
+  }
+
+  // ---------- Shot logic ----------
+  function consumeShell(){
+    // peek current shell (unknown to player unless magnified)
+    const shell = state.shells[0];
+    state.shells.shift();
+    ejectShellAnimation(els.dealerShells);
+    ejectShellAnimation(els.playerShells);
+    state.shotsTaken += 1;
+    state.currentShell = null;
+    state.currentKnown = false;
+    return shell;
+  }
+
+  function applyDamage(target){
+    if(target === "dealer"){
+      state.dealerHP = clamp(state.dealerHP - 1, 0, HP_MAX);
+      damagePulse(els.dealerPanel);
+      shake(els.dealerPanel);
+    } else {
+      state.playerHP = clamp(state.playerHP - 1, 0, HP_MAX);
+      damagePulse(els.playerPanel);
+      shake(els.playerPanel);
+    }
+  }
+
+  function endTurnOrDeath(){
+    if(state.playerHP === 0 || state.dealerHP === 0){
+      endRound();
+      return;
+    }
+    if(state.shells.length === 0){
+      endRound();
+      return;
+    }
+    // Cuff logic: if the side whose turn would next be active is cuffed, skip them.
+    nextActorAfterShot();
+  }
+
+  function nextActorAfterShot(){
+    // Phase is currently whichever actor just fired.
+    if(state.phase === "player-turn"){
+      if(state.playerSkipped){
+        state.playerSkipped = false;
+        state.phase = "dealer-turn";
+        renderAll();
+        setTimeout(dealerTurn, 600);
+        return;
+      }
+      state.phase = "dealer-turn";
+      renderAll();
+      setTimeout(dealerTurn, 600);
+    } else if(state.phase === "dealer-turn"){
+      if(state.dealerSkipped){
+        state.dealerSkipped = false;
+        state.phase = "player-turn";
+        renderAll();
+        return;
+      }
+      state.phase = "player-turn";
+      renderAll();
+    }
+  }
+
+  function playerShoot(target){
+    if(state.busy || state.phase !== "player-turn" || state.dealerSkipped) return;
+    state.busy = true;
+    renderActions();
+    const shell = consumeShell();
+    state.currentShell = shell; // for log if needed
+    state.playerItems.forEach(it=>{ if(it.faceUp && !it.used){} });
+    if(shell === "LIVE"){
+      flashScreen();
+      if(target === "dealer"){
+        applyDamage("dealer");
+        showToast("LIVE — the dealer winces", "live", 1000);
+      } else {
+        applyDamage("player");
+        showToast("LIVE — you drop", "live", 1000);
+      }
+      state.blanksChained = 0;
+    } else { // BLANK
+      if(target === "dealer"){
+        showToast("BLANK — wasted on the dealer", "blank", 1000);
+        state.blanksChained = 0;
+      } else {
+        state.blanksChained += 1;
+        state.maxBlankChain = Math.max(state.maxBlankChain, state.blanksChained);
+        showToast("BLANK — you keep the turn", "blank", 1000);
+      }
+    }
+    renderHP();
+    setTimeout(()=>{
+      state.busy = false;
+      endTurnOrDeath();
+    }, 1050);
+  }
+
+  // ---------- Player items ----------
+  function usePlayerItem(idx){
+    if(state.busy || state.phase !== "player-turn" || state.dealerSkipped) return;
+    const it = state.playerItems[idx];
+    if(!it || it.used) return;
+    it.used = true;
+    it.faceUp = true;
+    state.itemsUsed += 1;
+    if(it.type === "MAGNIFIER"){
+      const cur = state.shells[0];
+      const label = cur === "LIVE" ? "LIVE shell next" : "BLANK shell next";
+      showToast(`Magnifier: ${label}`, "gold", 1100);
+    } else if(it.type === "HANDCUFFS"){
+      state.dealerSkipped = true;
+      showToast("Handcuffs — dealer is cuffed", "gold", 1100);
+    } else if(it.type === "CIGARETTES"){
+      if(state.playerHP < HP_MAX){
+        state.playerHP = clamp(state.playerHP + 1, 0, HP_MAX);
+        showToast("Cigarettes — +1 HP", "gold", 1100);
+      } else {
+        showToast("Cigarettes wasted (full HP)", "gold", 1100);
+      }
+    }
+    renderAll();
+  }
+
+  // ---------- Dealer AI ----------
+  function dealerChooseItem(){
+    // Decide whether to use an item now.
+    if(state.dealerItems.length === 0) return null;
+    const usable = state.dealerItems.findIndex(it => !it.used);
+    if(usable < 0) return null;
+    const it = state.dealerItems[usable];
+
+    // Heuristic: use magnifier if current shell unknown AND big blanks chance
+    if(it.type === "MAGNIFIER" && state.shells.length > 0 && !state.dealerKnowsShell()){
+      const blanks = state.shells.filter(s => s === "BLANK").length;
+      if(blanks >= 2) return usable;
+    }
+    if(it.type === "CIGARETTES" && state.dealerHP <= 2){
+      return usable;
+    }
+    if(it.type === "HANDCUFFS" && state.shells.length > 0){
+      // Use handcuffs when blanks are likely (so player can chain safely? no, handcuffs skip player — actually dealer wants to skip player's NEXT turn).
+      // Useful when the next shell is LIVE and dealer wants to skip player turn after dealing.
+      const cur = state.shells[0];
+      if(cur === "LIVE") return usable;
+    }
+    return null;
+  }
+  function dealerKnowsShell(){
+    return state.dealerItems.some(it => it.type === "MAGNIFIER" && it.used && it.faceUp);
+  }
+  function dealerPeekShell(){
+    return state.shells[0] || null;
+  }
+  function dealerUseItem(idx){
+    const it = state.dealerItems[idx];
+    it.used = true;
+    it.faceUp = true;
+    state.itemsUsed += 1;
+    renderHands();
+    if(it.type === "MAGNIFIER"){
+      const cur = dealerPeekShell();
+      showToast(`Dealer uses Magnifier (${cur === "LIVE" ? "live" : "blank"})`, "gold", 950);
+    } else if(it.type === "HANDCUFFS"){
+      state.playerSkipped = true;
+      showToast("Dealer cuffs you", "gold", 950);
+    } else if(it.type === "CIGARETTES"){
+      if(state.dealerHP < HP_MAX){
+        state.dealerHP = clamp(state.dealerHP + 1, 0, HP_MAX);
+        showToast("Dealer smokes — +1 HP", "gold", 950);
+      } else {
+        showToast("Dealer wastes a cigarette", "gold", 950);
+      }
+      renderHP();
+    }
+  }
+
+  function dealerTurn(){
+    if(state.phase !== "dealer-turn") return;
+    if(state.dealerSkipped){
+      state.dealerSkipped = false;
+      state.phase = "player-turn";
+      renderAll();
+      return;
+    }
+    if(state.busy) return;
+    state.busy = true;
+    renderActions();
+    const think = setTimeout(()=>{
+      // 1) Item?
+      const itemIdx = dealerChooseItem();
+      if(itemIdx !== null){
+        dealerUseItem(itemIdx);
+        state.busy = false;
+        // re-evaluate: continue with shot
+        setTimeout(dealerTurn, 850);
+        return;
+      }
+      // 2) Decide action: shoot self if blanks likely AND hp low; else shoot player
+      const known = dealerKnowsShell();
+      const cur = known ? dealerPeekShell() : null;
+      let target;
+      if(known && cur === "BLANK"){
+        // blank at self → extra shot. But blank at dealer → pass turn (bad). Choose self.
+        target = "self";
+      } else if(known && cur === "LIVE"){
+        // known live: shoot player
+        target = "player";
+      } else {
+        // unknown shell
+        const blanks = state.shells.filter(s => s === "BLANK").length;
+        const lives = state.shells.length - blanks;
+        // low-HP bias toward shooting self (hoping for blank chain)
+        if(state.dealerHP <= 2 && blanks > 0 && blanks >= lives){
+          target = "self";
+        } else if(blanks >= 2 && state.dealerHP <= 2){
+          // mild bias: chance to shoot self when blanks are plentiful
+          target = state.rng() < 0.45 ? "self" : "player";
+        } else {
+          target = "player";
+        }
+      }
+      // Execute shot
+      const shell = consumeShell();
+      state.currentShell = shell;
+      if(shell === "LIVE"){
+        flashScreen();
+        if(target === "player"){
+          applyDamage("player");
+          showToast("LIVE — the dealer shoots you", "live", 1000);
+        } else {
+          applyDamage("dealer");
+          showToast("LIVE — dealer turns the gun on themselves", "live", 1000);
+        }
+        state.blanksChained = 0;
+      } else {
+        if(target === "player"){
+          showToast("BLANK — the dealer's shot clicks empty", "blank", 1000);
+          state.blanksChained = 0;
+        } else {
+          state.blanksChained += 1;
+          state.maxBlankChain = Math.max(state.maxBlankChain, state.blanksChained);
+          showToast("BLANK — dealer keeps firing", "blank", 1000);
+        }
+      }
+      renderHP();
+      setTimeout(()=>{
+        state.busy = false;
+        endTurnOrDeath();
+      }, 1050);
+    }, 650);
+  }
+
+  // ---------- Round / Match ----------
+  function endRound(){
+    state.phase = "round-end";
+    renderAll();
+    let playerWin = false, dealerWin = false, draw = false;
+    if(state.playerHP === 0 && state.dealerHP !== 0){ dealerWin = true; }
+    else if(state.dealerHP === 0 && state.playerHP !== 0){ playerWin = true; }
+    else if(state.playerHP === 0 && state.dealerHP === 0){ draw = true; }
+    else if(state.shells.length === 0){
+      if(state.playerHP > state.dealerHP) playerWin = true;
+      else if(state.dealerHP > state.playerHP) dealerWin = true;
+      else draw = true;
+    } else {
+      // shouldn't happen
+    }
+    if(playerWin) state.playerRoundWins += 1;
+    else if(dealerWin) state.dealerRoundWins += 1;
+    else state.drawnRounds += 1;
+    const verdict = playerWin ? "You win the round" : dealerWin ? "Dealer wins the round" : "Round draw";
+    showToast(verdict, playerWin||dealerWin ? "gold" : "blank", 1400);
+
+    setTimeout(()=>{
+      // Match end?
+      if(state.playerRoundWins >= 2 || state.dealerRoundWins >= 2 || state.round >= ROUNDS){
+        endMatch();
+      } else {
+        state.round += 1;
+        // Restore HP per spec? Spec doesn't say. Keep simple: HP carries as-is? Spec: "3 rounds form one match" — best of 3 rounds. Keep HP persistent across rounds to keep drama.
+        startRound();
+      }
+    }, 1500);
+  }
+
+  function endMatch(){
+    state.phase = "match-end";
+    renderAll();
+    let title = "Draw", cls = "draw", sub = `Match drawn (${state.playerRoundWins}–${state.dealerRoundWins}).`;
+    if(state.playerRoundWins > state.dealerRoundWins){
+      title = "You win the match"; cls = "win";
+      sub = `Rounds ${state.playerRoundWins}–${state.dealerRoundWins}${state.drawnRounds?` (${state.drawnRounds} drawn)`:""}.`;
+    } else if(state.dealerRoundWins > state.playerRoundWins){
+      title = "You lose"; cls = "lose";
+      sub = `Rounds ${state.dealerRoundWins}–${state.playerRoundWins}${state.drawnRounds?` (${state.drawnRounds} drawn)`:""}.`;
+    }
+    els.modalTitle.classList.remove("win","lose","draw");
+    els.modalTitle.classList.add(cls);
+    els.modalTitle.textContent = title;
+    els.modalSubtitle.textContent = sub;
+    const stats = [
+      ["Shots taken", state.shotsTaken],
+      ["Best blank chain", state.maxBlankChain],
+      ["Items used", state.itemsUsed],
+      ["Rounds won", `${state.playerRoundWins}–${state.dealerRoundWins}`],
+    ];
+    els.modalStats.innerHTML = stats.map(([k,v]) =>
+      `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`
+    ).join("");
+    els.modalSeed.textContent = `Seed: ${state.seed}`;
+    els.modalBg.classList.add("show");
+  }
+
+  // ---------- New match ----------
+  function newMatch(){
+    state.seed = Date.now();
+    state.rng = mulberry32(state.seed);
+    state.round = 1;
+    state.playerRoundWins = 0;
+    state.dealerRoundWins = 0;
+    state.drawnRounds = 0;
+    state.playerHP = HP_MAX;
+    state.dealerHP = HP_MAX;
+    state.shotsTaken = 0;
+    state.itemsUsed = 0;
+    state.maxBlankChain = 0;
+    state.blanksChained = 0;
+    state.playerSkipped = false;
+    state.dealerSkipped = false;
+    state.currentShell = null;
+    state.currentKnown = false;
+    state.dealerItems = [];
+    state.playerItems = [];
+    els.modalBg.classList.remove("show");
+    startRound();
+  }
+
+  // ---------- Wiring ----------
+  els.shootDealer.addEventListener("click", ()=> playerShoot("dealer"));
+  els.shootSelf.addEventListener("click", ()=> playerShoot("self"));
+  els.playAgain.addEventListener("click", newMatch);
+  els.howBtn.addEventListener("click", ()=> els.howto.classList.add("show"));
+  els.howClose.addEventListener("click", ()=> els.howto.classList.remove("show"));
+  els.howto.addEventListener("click", (e)=>{ if(e.target === els.howto) els.howto.classList.remove("show"); });
+  document.addEventListener("keydown", (e)=>{
+    if(els.howto.classList.contains("show") && (e.key === "Escape" || e.key === "Enter")){
+      els.howto.classList.remove("show"); return;
+    }
+    if(state.phase !== "player-turn" || state.busy || state.dealerSkipped) return;
+    if(e.key === "1" || e.key === "d" || e.key === "D"){ playerShoot("dealer"); }
+    else if(e.key === "2" || e.key === "s" || e.key === "S"){ playerShoot("self"); }
+  });
+
+  // Boot
+  newMatch();
+})();
+</script>
+</body>
+</html>
