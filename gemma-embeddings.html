@@ -381,17 +381,18 @@
   }
 
   @media (min-width: 760px) {
+    /* Diagrams are the load-bearing content. Layout stays single-column on
+       desktop so each diagram gets the full wrapper width; the body section
+       sits BELOW its diagram. The kicker label and body text ride at full
+       width so they read comfortably. */
     .walk-step {
-      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-      gap: 32px 48px;
-      align-items: start;
+      grid-template-columns: minmax(0, 1fr);
+      gap: 24px;
+      max-width: 800px;
+      margin: 0 auto;
+      width: 100%;
     }
-    /* `.flip` swaps visual column order: body left, diagram right. */
-    .walk-step.flip > .step-body { grid-column: 1; grid-row: 1; }
-    .walk-step.flip > .diagram-frame { grid-column: 2; grid-row: 1; }
-    /* Default order: diagram left, body right. */
-    .walk-step:not(.flip) > .step-body { grid-column: 2; grid-row: 1; }
-    .walk-step:not(.flip) > .diagram-frame { grid-column: 1; grid-row: 1; }
+    .walk-step .diagram-frame { max-width: 720px; margin-left: auto; margin-right: auto; }
   }
 
   .step-num {
