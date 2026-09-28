@@ -373,29 +373,35 @@
   .mental .diagram-frame { background: var(--bg); box-shadow: var(--shadow-md); }
 
   /* ----- walkthrough ----- */
-  .walk { display: grid; grid-template-columns: 1fr; gap: 48px; }
+  .walk { display: grid; grid-template-columns: 1fr; gap: 56px; }
   .walk-step {
     display: grid;
     grid-template-columns: minmax(0, 1fr);
-    gap: 24px;
+    gap: 16px 24px;
   }
-  @media (min-width: 920px) {
+
+  @media (min-width: 760px) {
     .walk-step {
-      grid-template-columns: 320px minmax(0, 1fr);
-      gap: 56px;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      gap: 32px 48px;
       align-items: start;
     }
-    .walk-step.flip { grid-template-columns: minmax(0, 1fr) 320px; }
-    .walk-step.flip .step-num { order: 2; }
-    .walk-step.flip .step-body { order: 1; }
+    /* `.flip` swaps visual column order: body left, diagram right. */
+    .walk-step.flip > .step-body { grid-column: 1; grid-row: 1; }
+    .walk-step.flip > .diagram-frame { grid-column: 2; grid-row: 1; }
+    /* Default order: diagram left, body right. */
+    .walk-step:not(.flip) > .step-body { grid-column: 2; grid-row: 1; }
+    .walk-step:not(.flip) > .diagram-frame { grid-column: 1; grid-row: 1; }
   }
+
   .step-num {
     font-family: var(--font-mono);
     font-size: 11px;
     letter-spacing: 0.16em;
     text-transform: uppercase;
     color: var(--accent-deep);
-    margin-bottom: 8px;
+    margin-bottom: 10px;
+    display: inline-block;
   }
   .step-body h3 {
     font-size: var(--h3);
@@ -812,18 +818,21 @@
             cosine-sim lives here
           </text>
 
-          <!-- labeled dims above -->
-          <g font-family="Geist Mono, monospace" font-size="10" style="fill:var(--ink)">
-            <line x1="20"  y1="0" x2="20"  y2="36"  stroke-dasharray="2 3" style="stroke:var(--rule-2)"/>
-            <line x1="85"  y1="0" x2="85"  y2="36"  stroke-dasharray="2 3" style="stroke:var(--rule-2)"/>
-            <line x1="150" y1="0" x2="150" y2="36"  stroke-dasharray="2 3" style="stroke:var(--rule-2)"/>
-            <line x1="215" y1="0" x2="215" y2="36"  stroke-dasharray="2 3" style="stroke:var(--rule-2)"/>
+          <!-- labeled dims above & below the bar (offset so labels never collide) -->
+          <g font-family="Geist Mono, monospace" font-size="10" style="fill:var(--rule-2)">
+            <!-- 2 leaders + labels above the bar -->
+            <line x1="22"  y1="-26" x2="22"  y2="36" style="stroke:var(--rule-2)" stroke-dasharray="2 3"/>
+            <line x1="100" y1="-26" x2="100" y2="36" style="stroke:var(--rule-2)" stroke-dasharray="2 3"/>
           </g>
           <g font-family="Geist Mono, monospace" font-size="10">
-            <text x="20"  y="-2" text-anchor="middle" style="fill:var(--ink-2)">dim 412 · animals <tspan  font-weight="600" style="fill:var(--accent-deep)">+0.31</tspan></text>
-            <text x="85"  y="-2" text-anchor="middle" style="fill:var(--ink-2)">dim 17  · domestic <tspan  font-weight="600" style="fill:var(--accent-deep)">+0.18</tspan></text>
-            <text x="150" y="-2" text-anchor="middle" style="fill:var(--ink-2)">dim 503 · furniture <tspan  font-weight="600" style="fill:var(--accent-deep)">+0.22</tspan></text>
-            <text x="215" y="-2" text-anchor="middle" style="fill:var(--ink-2)">dim 71  · sitting <tspan  font-weight="600" style="fill:var(--accent-deep)">+0.14</tspan></text>
+            <text x="22"  y="-32" text-anchor="middle" style="fill:var(--ink-2)">dim 412 · animals <tspan font-weight="600" style="fill:var(--accent-deep)">+0.31</tspan></text>
+            <text x="100" y="-32" text-anchor="middle" style="fill:var(--ink-2)">dim 17 · domestic <tspan font-weight="600" style="fill:var(--accent-deep)">+0.18</tspan></text>
+
+            <!-- 2 leaders + labels below the bar (mirror pattern, well below the bar baseline) -->
+            <line x1="178" y1="36" x2="178" y2="78" style="stroke:var(--rule-2)" stroke-dasharray="2 3"/>
+            <line x1="208" y1="36" x2="208" y2="78" style="stroke:var(--rule-2)" stroke-dasharray="2 3"/>
+            <text x="178" y="92" text-anchor="middle" style="fill:var(--ink-2)">dim 503 · furniture <tspan font-weight="600" style="fill:var(--accent-deep)">+0.22</tspan></text>
+            <text x="208" y="92" text-anchor="middle" style="fill:var(--ink-2)">dim 71 · sitting <tspan font-weight="600" style="fill:var(--accent-deep)">+0.14</tspan></text>
           </g>
 
           <text x="115" y="430" text-anchor="middle" font-family="Inter, sans-serif" font-size="12"  font-weight="500" style="fill:var(--ink-2)">
@@ -860,10 +869,9 @@
 
       <!-- a -->
       <div class="walk-step" id="step-what">
-        <div>
-          <span class="step-num">A · What it actually is</span>
-        </div>
+        
         <div class="step-body">
+          <span class="step-num">A · What it actually is</span>
           <h3>An embedding is a vector where meaning is geometry.</h3>
           <p>
             Take the words <em>king</em>, <em>queen</em>, <em>car</em>, and <em>banana</em>. Each one becomes a list of numbers. The numbers themselves look like noise, but if you plotted them in space, royalty would cluster together. Vehicles would sit in another neighborhood. Fruit would be somewhere else entirely. The whole job of an embedding model is to learn that geometry so you can use it later, for search, clustering, classification, or anything that needs a notion of <em>close</em>.
@@ -871,7 +879,11 @@
           <p>
             How close is <em>close</em>? You measure it with cosine similarity, which we'll come back to. For now, just remember: similarity in vector space is the substitute for similarity in meaning.
           </p>
-          <div class="diagram-frame" style="margin-top:18px;">
+          <div class="why">
+            <span class="why-label">Why this matters</span>
+            <p><strong>Everything downstream rides on the geometry.</strong> Retrieval, deduplication, recommendation, classification, clustering, anomaly detection. None of these work unless the embedding function learned distances that match what humans would call <em>similar</em>.</p>
+          </div>
+<div class="diagram-frame">
             <svg viewBox="0 0 600 220" role="img" aria-label="Vector space concept: similar vectors cluster together">
               <defs>
                 <marker id="aArrowG" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L7,3 z" style="fill:var(--accent-deep)"/></marker>
@@ -914,19 +926,14 @@
             </svg>
             <p class="diagram-caption">A 2D sketch. Real Gemma vectors live in 768 dimensions, which is enough room for words to find their own neighborhoods without bumping into each other.</p>
           </div>
-          <div class="why">
-            <span class="why-label">Why this matters</span>
-            <p><strong>Everything downstream rides on the geometry.</strong> Retrieval, deduplication, recommendation, classification, clustering, anomaly detection. None of these work unless the embedding function learned distances that match what humans would call <em>similar</em>.</p>
-          </div>
         </div>
       </div>
 
       <!-- b -->
       <div class="walk-step flip" id="step-tokens">
-        <div>
-          <span class="step-num">B · Tokenization</span>
-        </div>
+        
         <div class="step-body">
+          <span class="step-num">B · Tokenization</span>
           <h3>First, text becomes tokens, then token IDs.</h3>
           <p>
             Models don't read characters or words. They read tokens, which are short chunks of characters picked from a fixed vocabulary (Gemma's has 256K of them). The tokenizer is Byte-Pair Encoding: it greedily merges the most frequent adjacent pairs until nothing else combines.
@@ -934,7 +941,11 @@
           <p>
             Why bother? Because it gives the model a stable vocabulary across languages and misspellings. <code>"unhappiness"</code> doesn't need its own entry; <code>"un"</code> + <code>"happiness"</code> covers it, and so does <code>"un"</code> + <code>"happi"</code> + <code>"ness"</code>. Each token gets an integer ID (a number that points into the model's embedding table), and that's what actually flows downstream.
           </p>
-          <div class="diagram-frame" style="margin-top:18px;">
+          <div class="why">
+            <span class="why-label">Why this matters</span>
+            <p><strong>Your billable tokens start here.</strong> Every API charge, every context window limit, every latency estimate is denominated in tokens, not characters. Knowing that one "word" can equal four tokens explains a lot of weird pricing math.</p>
+          </div>
+<div class="diagram-frame">
             <svg viewBox="0 0 600 180" role="img" aria-label="Tokenization: sentence split into BPE tokens with ids">
               <g font-family="Geist Mono, monospace" font-size="12" style="fill:var(--ink)">
                 <text x="20"  y="34" font-weight="600">"unhappiness"</text>
@@ -960,19 +971,14 @@
             </svg>
             <p class="diagram-caption">Subword tokenization is what makes these models multilingual without ballooning the vocabulary. Rare words become sequences of common pieces. Common words stay whole.</p>
           </div>
-          <div class="why">
-            <span class="why-label">Why this matters</span>
-            <p><strong>Your billable tokens start here.</strong> Every API charge, every context window limit, every latency estimate is denominated in tokens, not characters. Knowing that one "word" can equal four tokens explains a lot of weird pricing math.</p>
-          </div>
         </div>
       </div>
 
       <!-- c -->
       <div class="walk-step" id="step-attention">
-        <div>
-          <span class="step-num">C · Attention</span>
-        </div>
+        
         <div class="step-body">
+          <span class="step-num">C · Attention</span>
           <h3>Attention lets each token look at every other token.</h3>
           <p>
             Once you have a list of token vectors (each one a learned embedding of a chunk of text), the transformer needs a way for them to <em>talk</em>. That's attention. Every token produces three vectors from its embedding: a <strong>query</strong> (<code>Q</code>), a <strong>key</strong> (<code>K</code>), and a <strong>value</strong> (<code>V</code>).
@@ -980,7 +986,11 @@
           <p>
             To update itself, a token asks: <em>how relevant is every other token to me?</em> It scores each one by <code>Q · K</code>, softmaxes the scores into weights, and uses those weights to mix the <code>V</code> vectors. The result is a new vector that has been enriched with context from the whole sequence. Eight stacked layers in Gemma do this eight times, with a multi-layer perceptron in between.
           </p>
-          <div class="diagram-frame" style="margin-top:18px;">
+          <div class="why">
+            <span class="why-label">Why this matters</span>
+            <p><strong>Polysemy lives in attention.</strong> Without attention, <em>bank</em> and <em>river bank</em> get the same vector. With it, "river" can pull the meaning toward water by the time <em>bank</em> reaches its final layer. That's why transformer-era embeddings actually understand sentences, where earlier bag-of-words ones didn't.</p>
+          </div>
+<div class="diagram-frame">
             <svg viewBox="0 0 600 280" role="img" aria-label="Attention: three tokens producing Q, K, V vectors">
               <defs>
                 <marker id="aLine" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
@@ -1080,19 +1090,14 @@
             </svg>
             <p class="diagram-caption">The diagonal is heavy because the cat cares most about itself. Off-diagonal weights show which other tokens contribute to its new context vector. Each layer learns its own pattern.</p>
           </div>
-          <div class="why">
-            <span class="why-label">Why this matters</span>
-            <p><strong>Polysemy lives in attention.</strong> Without attention, <em>bank</em> and <em>river bank</em> get the same vector. With it, "river" can pull the meaning toward water by the time <em>bank</em> reaches its final layer. That's why transformer-era embeddings actually understand sentences, where earlier bag-of-words ones didn't.</p>
-          </div>
         </div>
       </div>
 
       <!-- d -->
       <div class="walk-step flip" id="step-pooling">
-        <div>
-          <span class="step-num">D · Pooling</span>
-        </div>
+        
         <div class="step-body">
+          <span class="step-num">D · Pooling</span>
           <h3>Many token vectors become one sentence vector.</h3>
           <p>
             After the last layer, every token has its own contextual vector. To turn the sequence into a single 768-dim vector, you <em>pool</em>. Gemma uses <strong>mean pooling</strong>: each dimension is averaged across all token positions, weighted by an attention mask so padding doesn't leak in.
@@ -1100,7 +1105,11 @@
           <p>
             Other models do <em>CLS pooling</em> (use the first token's vector) or <em>last-token pooling</em>. Mean is usually a safe default for retrieval because every input token gets a vote.
           </p>
-          <div class="diagram-frame" style="margin-top:18px;">
+          <div class="why">
+            <span class="why-label">Why this matters</span>
+            <p><strong>How you pool shapes what similarity means.</strong> Mean-pool a sentence like "Not bad" and you get something close to "Okay". Last-token-pool it and you lean toward the trailing nuance. Pick the pooling that matches your retrieval question, not the one that's easiest to implement.</p>
+          </div>
+<div class="diagram-frame">
             <svg viewBox="0 0 600 220" role="img" aria-label="Mean pooling: 7 token vectors averaged into one">
               <!-- 7 input vectors -->
               <g font-family="Geist Mono, monospace" font-size="11">
@@ -1150,19 +1159,14 @@
             </svg>
             <p class="diagram-caption">Every token votes equally. If your sentence is padded to a fixed length, mask the pads out so they don't dilute the average. The Hugging Face snippet for the Gemma embedding model does this by default.</p>
           </div>
-          <div class="why">
-            <span class="why-label">Why this matters</span>
-            <p><strong>How you pool shapes what similarity means.</strong> Mean-pool a sentence like "Not bad" and you get something close to "Okay". Last-token-pool it and you lean toward the trailing nuance. Pick the pooling that matches your retrieval question, not the one that's easiest to implement.</p>
-          </div>
         </div>
       </div>
 
       <!-- e -->
       <div class="walk-step" id="step-cosine">
-        <div>
-          <span class="step-num">E · Cosine similarity</span>
-        </div>
+        
         <div class="step-body">
+          <span class="step-num">E · Cosine similarity</span>
           <h3>How close are two vectors? Use cosine.</h3>
           <p>
             Two vectors, <code>a</code> and <code>b</code>, point in roughly the same direction if the angle between them is small. Cosine similarity measures the cosine of that angle, giving a number in <code>[-1, 1]</code>. <code>1</code> means identical, <code>0</code> means orthogonal, <code>-1</code> means opposite.
@@ -1170,7 +1174,11 @@
           <p>
             Why not Euclidean distance? Because embeddings live on or near a hypersphere. Two long documents and two short documents can have the same Euclidean distance with very different meanings. Cosine ignores magnitude, which is what you want when comparing <em>directions</em> of meaning rather than <em>sizes</em>.
           </p>
-          <div class="diagram-frame" style="margin-top:18px;">
+          <div class="why">
+            <span class="why-label">Why this matters</span>
+            <p><strong>Retrieval runs on cosine.</strong> Pick the top-k nearest neighbors by cosine similarity over your corpus and you have a search engine. Cosine + a vector index (FAISS, ScaNN, Pinecone) is the whole recipe behind every modern RAG system.</p>
+          </div>
+<div class="diagram-frame">
             <svg viewBox="0 0 600 260" role="img" aria-label="Cosine similarity: angle between vectors determines score">
               <defs>
                 <marker id="cArrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
@@ -1216,19 +1224,14 @@
             </svg>
             <p class="diagram-caption">The angle sweeps. The cosine readout updates. Watch what "close" really means: not closeness in space, but alignment in direction.</p>
           </div>
-          <div class="why">
-            <span class="why-label">Why this matters</span>
-            <p><strong>Retrieval runs on cosine.</strong> Pick the top-k nearest neighbors by cosine similarity over your corpus and you have a search engine. Cosine + a vector index (FAISS, ScaNN, Pinecone) is the whole recipe behind every modern RAG system.</p>
-          </div>
         </div>
       </div>
 
       <!-- f -->
       <div class="walk-step flip" id="step-matryoshka">
-        <div>
-          <span class="step-num">F · Matryoshka (the Gemma twist)</span>
-        </div>
+        
         <div class="step-body">
+          <span class="step-num">F · Matryoshka (the Gemma twist)</span>
           <h3>Use the first 64 dims, or the first 768, your choice.</h3>
           <p>
             Standard embedding models force you to use the full 768 dimensions. Gemma is trained with <em>Matryoshka Representation Learning</em>: the model is taught to put the most useful signal in the first 64 dimensions, then layer the next 128, then 256, all the way to 768. You can truncate at any prefix and still get something useful.
@@ -1236,7 +1239,11 @@
           <p>
             Use 64 dims for cheap retrieval over millions of vectors. Use 768 for accurate reranking. The model is one checkpoint, and the engineering tradeoff is now yours.
           </p>
-          <div class="diagram-frame" style="margin-top:18px;">
+          <div class="why">
+            <span class="why-label">Why this matters</span>
+            <p><strong>Matryoshka changes your storage math.</strong> Indexing 100M chunks at 64 dims is roughly 8x cheaper than at 512. For most production retrieval workloads, the 256-dim prefix is the sweet spot between recall and cost.</p>
+          </div>
+<div class="diagram-frame">
             <svg viewBox="0 0 600 240" role="img" aria-label="Matryoshka: nested dim prefixes 64 / 128 / 256 / 768">
               <!-- 4 nested bars -->
               <g transform="translate(60,40)">
@@ -1275,19 +1282,14 @@
             </svg>
             <p class="diagram-caption">Truncate anywhere. The first 64 dims are already useful because the model was trained to make them so. No retraining, no second embedding model.</p>
           </div>
-          <div class="why">
-            <span class="why-label">Why this matters</span>
-            <p><strong>Matryoshka changes your storage math.</strong> Indexing 100M chunks at 64 dims is roughly 8x cheaper than at 512. For most production retrieval workloads, the 256-dim prefix is the sweet spot between recall and cost.</p>
-          </div>
         </div>
       </div>
 
       <!-- helper: pooling comparison -->
       <div class="walk-step flip" id="step-pooling-compare">
-        <div>
-          <span class="step-num">D.2 · Pooling, compared</span>
-        </div>
+        
         <div class="step-body">
+          <span class="step-num">D.2 · Pooling, compared</span>
           <h3>Three pooling strategies, three different sentences.</h3>
           <p>
             Same input, three poolers, three vectors. Mean pooling averages all token positions into one vector. CLS pooling grabs the special classification token's final vector. Last-token pooling grabs the final token, which under causal masking is the only token that has seen everything to its left.
@@ -1295,7 +1297,11 @@
           <p>
             The right one depends on your model. BERT-family models expect CLS pooling; decoder-only LLaMA-family models often prefer last-token. Gemma's own embedding model uses mean pooling, masked to ignore padding, which is what you get from the Hugging Face checkpoint by default.
           </p>
-          <div class="diagram-frame" style="margin-top:18px;">
+          <div class="why">
+            <span class="why-label">Why this matters</span>
+            <p><strong>Wrong pooler throws away the model's signal.</strong> Running mean-pool over a decoder-only model that was fine-tuned with last-token pooling won't fail loudly; it will just quietly rank your documents worse. Always check the model's card or config before you wire it up.</p>
+          </div>
+<div class="diagram-frame">
             <svg viewBox="0 0 600 240" role="img" aria-label="Pooling strategies comparison: mean / CLS / last-token">
               <defs>
                 <marker id="pArrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
@@ -1362,19 +1368,14 @@
             </svg>
             <p class="diagram-caption">Pooling is a model-family decision more than a personal preference. Match what the model was trained for, then your vectors behave like the paper says.</p>
           </div>
-          <div class="why">
-            <span class="why-label">Why this matters</span>
-            <p><strong>Wrong pooler throws away the model's signal.</strong> Running mean-pool over a decoder-only model that was fine-tuned with last-token pooling won't fail loudly; it will just quietly rank your documents worse. Always check the model's card or config before you wire it up.</p>
-          </div>
         </div>
       </div>
 
       <!-- helper: contrastive training diagram -->
       <div class="walk-step" id="step-contrastive">
-        <div>
-          <span class="step-num">F.2 · How it's trained</span>
-        </div>
+        
         <div class="step-body">
+          <span class="step-num">F.2 · How it's trained</span>
           <h3>The geometry is learned, not given.</h3>
           <p>
             Embedding models are trained with <em>contrastive learning</em>: pairs of texts that should be near each other are pulled together, pairs that should be far apart are pushed apart. For Gemma, the positive pairs are paraphrases, queries with their answers, and similar documents mined from the training corpus. Negatives are sampled from the rest of the batch.
@@ -1382,7 +1383,11 @@
           <p>
             Each step of training is basically saying: <em>"make these two sentences closer in vector space than these other ten."</em> Repeat a trillion times and you have an embedding model that knows what humans mean by similar.
           </p>
-          <div class="diagram-frame" style="margin-top:18px;">
+          <div class="why">
+            <span class="why-label">Why this matters</span>
+            <p><strong>Embedding quality rides on the data.</strong> Pretraining data, hard-negative mining, and the choice of contrastive loss are the levers that turn a generic transformer into a useful embedding model. Most "embedding quality" wins come from rebuilding the data pipeline, not the architecture.</p>
+          </div>
+<div class="diagram-frame">
             <svg viewBox="0 0 600 240" role="img" aria-label="Contrastive training: anchor pairs with positives and negatives">
               <defs>
                 <marker id="ctPull" markerWidth="10" markerHeight="10" refX="6" refY="3" orient="auto">
@@ -1438,10 +1443,6 @@
               </line>
             </svg>
             <p class="diagram-caption">Each training step is a tiny rearrangement: positives slide inward, negatives slide outward. The trick is sampling enough hard negatives that the model doesn't get lazy.</p>
-          </div>
-          <div class="why">
-            <span class="why-label">Why this matters</span>
-            <p><strong>Embedding quality rides on the data.</strong> Pretraining data, hard-negative mining, and the choice of contrastive loss are the levers that turn a generic transformer into a useful embedding model. Most "embedding quality" wins come from rebuilding the data pipeline, not the architecture.</p>
           </div>
         </div>
       </div>
