@@ -1,0 +1,798 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Speculative Decoding. How LLMs Go Brrr Without Going Wrong</title>
+<meta name="description" content="A staff-level walkthrough of speculative decoding: the draft-then-verify trick, why it stays lossless, and how EAGLE-3, DFlash, and DSpark push it further." />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script>
+  (function(){
+    try {
+      var t = localStorage.getItem('theme');
+      var d = t || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+      document.documentElement.setAttribute('data-theme', d);
+    } catch(e) { document.documentElement.setAttribute('data-theme', 'light'); }
+  })();
+</script>
+<style>
+  :root {
+    --bg: #ffffff;
+    --bg-soft: rgba(13,13,13,0.025);
+    --bg-grad: radial-gradient(1200px 600px at 50% -10%, rgba(24,226,153,0.10), transparent 60%),
+               radial-gradient(800px 400px at 90% 0%, rgba(24,226,153,0.06), transparent 60%);
+    --fg: #0a0a0a;
+    --fg-soft: #3a3a3a;
+    --fg-mute: #6a6a6a;
+    --border: rgba(13,13,13,0.08);
+    --border-soft: rgba(13,13,13,0.05);
+    --brand: #18E299;
+    --brand-soft: rgba(24,226,153,0.12);
+    --brand-strong: #0fa874;
+    --accent-2: #ff7a59;
+    --accent-3: #6a8cff;
+    --code-bg: rgba(13,13,13,0.04);
+    --code-fg: #1a1a1a;
+    --shadow: 0 1px 0 rgba(13,13,13,0.04), 0 8px 24px -12px rgba(13,13,13,0.10);
+    --grid: rgba(13,13,13,0.04);
+  }
+  [data-theme="dark"] {
+    --bg: #0b0c0f;
+    --bg-soft: rgba(255,255,255,0.04);
+    --bg-grad: radial-gradient(1200px 600px at 50% -10%, rgba(42,245,168,0.10), transparent 60%),
+               radial-gradient(800px 400px at 90% 0%, rgba(42,245,168,0.05), transparent 60%);
+    --fg: #f4f4f5;
+    --fg-soft: #d1d5db;
+    --fg-mute: #9ca3af;
+    --border: rgba(255,255,255,0.10);
+    --border-soft: rgba(255,255,255,0.06);
+    --brand: #2af5a8;
+    --brand-soft: rgba(42,245,168,0.14);
+    --brand-strong: #18e299;
+    --code-bg: rgba(255,255,255,0.06);
+    --code-fg: #f4f4f5;
+    --shadow: 0 1px 0 rgba(255,255,255,0.04), 0 12px 30px -14px rgba(0,0,0,0.60);
+    --grid: rgba(255,255,255,0.05);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--bg);
+    background-image: var(--bg-grad);
+    background-attachment: fixed;
+    color: var(--fg);
+    line-height: 1.55;
+    font-size: 17px;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  a { color: var(--brand-strong); text-decoration: none; border-bottom: 1px solid transparent; }
+  a:hover { border-bottom-color: var(--brand); }
+  code, pre { font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace; }
+  code:not(pre code) {
+    background: var(--code-bg);
+    color: var(--code-fg);
+    padding: 1px 6px;
+    border-radius: 6px;
+    font-size: 0.88em;
+    border: 1px solid var(--border-soft);
+  }
+  pre { background: var(--code-bg); padding: 14px 18px; border-radius: 12px; border: 1px solid var(--border-soft); overflow-x: auto; }
+  .container { max-width: 1200px; margin: 0 auto; padding: 0 24px; }
+  .mono-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--brand-strong);
+  }
+
+  /* NAV */
+  .nav {
+    position: sticky; top: 0; z-index: 50;
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    background: color-mix(in srgb, var(--bg) 80%, transparent);
+    border-bottom: 1px solid var(--border-soft);
+  }
+  .nav-inner { display: flex; align-items: center; justify-content: space-between; padding: 14px 0; }
+  .brand { font-weight: 600; font-size: 15px; display: flex; align-items: center; gap: 10px; }
+  .brand-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--brand); box-shadow: 0 0 14px var(--brand); }
+  .nav-actions { display: flex; gap: 10px; align-items: center; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 8px 16px;
+    border-radius: 9999px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--fg);
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all .2s ease;
+  }
+  .pill:hover { border-color: var(--brand); color: var(--brand-strong); }
+  .pill .icon { width: 14px; height: 14px; }
+
+  /* HERO */
+  .hero { padding: 80px 0 56px; text-align: center; }
+  .hero h1 {
+    font-size: clamp(38px, 6vw, 64px);
+    line-height: 1.05;
+    letter-spacing: -0.02em;
+    margin: 14px auto 18px;
+    font-weight: 700;
+    max-width: 900px;
+  }
+  .hero h1 .accent { background: linear-gradient(120deg, var(--brand) 0%, var(--brand-strong) 100%); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .hero .tag { color: var(--fg-soft); font-size: 19px; max-width: 720px; margin: 0 auto 32px; }
+  .what { max-width: 720px; margin: 0 auto; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; text-align: left; }
+  .what li { list-style: none; padding: 12px 14px; border: 1px solid var(--border-soft); border-radius: 12px; font-size: 14px; color: var(--fg-soft); display: flex; gap: 10px; }
+  .what li::before { content: "→"; color: var(--brand); }
+  @media (max-width: 640px) { .what { grid-template-columns: 1fr; } }
+
+  /* SECTION */
+  section { padding: 64px 0; }
+  .section-tag { margin-bottom: 16px; }
+  h2 {
+    font-size: clamp(28px, 4vw, 40px);
+    line-height: 1.1;
+    letter-spacing: -0.015em;
+    margin: 0 0 20px;
+    font-weight: 700;
+  }
+  h3 { font-size: 22px; line-height: 1.2; margin: 0 0 12px; font-weight: 600; }
+  p { margin: 0 0 14px; color: var(--fg-soft); }
+  p.lead { font-size: 19px; color: var(--fg); }
+
+  /* MODEL CALLOUT */
+  .callout {
+    margin: 36px 0 8px;
+    padding: 28px 32px;
+    border-radius: 18px;
+    border: 1px solid var(--brand);
+    background: var(--brand-soft);
+    display: flex; gap: 18px; align-items: flex-start;
+  }
+  .callout .badge {
+    flex-shrink: 0;
+    background: var(--brand);
+    color: #06231a;
+    padding: 4px 10px;
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  .callout p { margin: 0; font-size: 18px; color: var(--fg); font-weight: 500; }
+
+  /* DIAGRAM CONTAINER */
+  .diagram {
+    margin: 28px auto;
+    max-width: 920px;
+    border-radius: 16px;
+    border: 1px solid var(--border-soft);
+    background: var(--bg);
+    padding: 20px;
+    overflow: hidden;
+  }
+  .diagram svg { width: 100%; height: auto; display: block; }
+  .diagram-caption { font-size: 13px; color: var(--fg-mute); margin-top: 12px; text-align: center; }
+
+  /* TWO-COLUMN LAYOUT */
+  .row { display: grid; grid-template-columns: 1.4fr 1fr; gap: 28px; align-items: start; }
+  @media (max-width: 880px) { .row { grid-template-columns: 1fr; } }
+
+  /* ASIDE / WHY THIS MATTERS */
+  aside.why {
+    padding: 18px 20px;
+    border-left: 3px solid var(--brand);
+    background: var(--brand-soft);
+    border-radius: 0 12px 12px 0;
+    font-size: 14px;
+    color: var(--fg);
+  }
+  aside.why .label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--brand-strong);
+    font-weight: 700;
+    margin-bottom: 6px;
+    display: block;
+  }
+
+  /* WALKTHROUGH SECTIONS */
+  .walk-section { padding-top: 24px; padding-bottom: 24px; border-top: 1px solid var(--border-soft); }
+  .walk-section:first-of-type { border-top: none; padding-top: 0; }
+  .step-num {
+    font-family: 'JetBrains Mono', monospace;
+    color: var(--brand-strong);
+    font-size: 12px;
+    letter-spacing: 0.1em;
+    font-weight: 600;
+  }
+
+  /* CONFUSION CARDS */
+  .confusion-grid { display: grid; gap: 16px; margin-top: 24px; }
+  .conf-card {
+    padding: 22px 26px;
+    border-radius: 14px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+  }
+  .conf-q { font-weight: 600; color: var(--fg); margin-bottom: 8px; font-size: 16px; display: flex; gap: 12px; align-items: flex-start; }
+  .conf-q::before {
+    content: counter(conf);
+    counter-increment: conf;
+    background: var(--bg-soft);
+    border: 1px solid var(--border);
+    color: var(--brand-strong);
+    width: 26px; height: 26px;
+    border-radius: 8px;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 13px;
+    font-family: 'JetBrains Mono', monospace;
+    flex-shrink: 0;
+  }
+  .confusion-grid { counter-reset: conf; }
+  .conf-a { color: var(--fg-soft); padding-left: 38px; }
+
+  /* WHERE TO GO NEXT */
+  .next-list { list-style: none; padding: 0; display: grid; gap: 14px; margin-top: 24px; }
+  .next-list li {
+    padding: 18px 22px;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    background: var(--bg);
+    transition: border-color .2s;
+  }
+  .next-list li:hover { border-color: var(--brand); }
+  .next-list .kind {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    color: var(--brand-strong);
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    margin-bottom: 4px;
+    display: block;
+  }
+  .next-list .title { font-weight: 600; color: var(--fg); font-size: 16px; }
+  .next-list .desc { color: var(--fg-soft); font-size: 14px; margin-top: 4px; }
+
+  /* FOOTER */
+  footer {
+    border-top: 1px solid var(--border-soft);
+    padding: 36px 0 56px;
+    color: var(--fg-mute);
+    font-size: 13px;
+    text-align: center;
+  }
+
+  /* DIVIDER */
+  .hr { border: none; border-top: 1px solid var(--border-soft); margin: 0; }
+
+  /* DIAGRAM-SPECIFIC */
+  /* Token flow animation */
+  @keyframes flow-token {
+    0% { transform: translateX(0); opacity: 0; }
+    10% { opacity: 1; }
+    90% { opacity: 1; }
+    100% { transform: translateX(var(--dx, 320px)); opacity: 0; }
+  }
+  @keyframes pulse-accept { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.06); } }
+  @keyframes blink-soft { 0%, 100% { opacity: 0.4; } 50% { opacity: 1; } }
+  @keyframes slow-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+  @keyframes draw-line { from { stroke-dashoffset: 100; } to { stroke-dashoffset: 0; } }
+  @keyframes drift { 0% { transform: translateY(0); } 50% { transform: translateY(-4px); } 100% { transform: translateY(0); } }
+
+  /* Reduced motion */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
+  }
+
+  /* Code block highlight */
+  .code-inline { color: var(--brand-strong); }
+</style>
+</head>
+<body>
+<nav class="nav">
+  <div class="container nav-inner">
+    <div class="brand"><span class="brand-dot"></span><span>Hermes Explainer</span></div>
+    <div class="nav-actions">
+      <button class="pill" id="theme-toggle" aria-label="Toggle theme">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+        <span id="theme-label">Light</span>
+      </button>
+    </div>
+  </div>
+</nav>
+
+<header class="hero container">
+  <div class="mono-label">Day 2. Inference</div>
+  <h1>Speculative Decoding. <br/><span class="accent">how LLMs go brrr without going wrong</span></h1>
+  <p class="tag">A staff-level walkthrough of the trick that cuts LLM serving cost by 2x to 5x while keeping the output bit-for-bit identical to a slow decode.</p>
+  <ul class="what">
+    <li>Why autoregressive decoding is the actual bottleneck in production</li>
+    <li>The draft-then-verify algorithm and why it stays lossless</li>
+    <li>How EAGLE-3, DFlash, and DSpark each attack a different bottleneck</li>
+    <li>What to measure in your own serving stack to know if it will pay off</li>
+  </ul>
+</header>
+
+<hr class="hr" />
+
+<div class="container">
+  <div class="callout">
+    <span class="badge">Model in 1 sentence</span>
+    <p>A small, fast draft model guesses the next <code>γ</code> tokens, the big target model verifies the whole block in one parallel forward pass and accepts only the tokens that match its own distribution using rejection sampling.</p>
+  </div>
+</div>
+
+<section class="container" id="mental-model">
+  <div class="section-tag mono-label">The Mental Model</div>
+  <h2>The slowest part of an LLM is not the model. It is the loop.</h2>
+  <p class="lead">Every chat you have ever sent to an LLM produced exactly one token per forward pass through billions of parameters. The math is sitting there idle most of the time.</p>
+
+  <div class="diagram">
+    <svg viewBox="0 0 880 360" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Comparison of autoregressive decoding versus speculative decoding">
+      <defs>
+        <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" style="fill:var(--fg-mute)"/>
+        </marker>
+      </defs>
+
+      <!-- Top row: vanilla -->
+      <text x="20" y="30" font-family="JetBrains Mono" font-size="11" style="fill:var(--fg-mute);">VANILLA AUTOREGRESSIVE</text>
+
+      <g transform="translate(20, 50)">
+        <!-- Sequence of tokens -->
+        <g>
+          <rect x="0" y="0" width="60" height="36" rx="6" style="fill:var(--bg-soft);stroke:var(--border)"/>
+          <text x="30" y="22" text-anchor="middle" font-size="14" style="fill:var(--fg)">The</text>
+        </g>
+        <g>
+          <rect x="80" y="0" width="60" height="36" rx="6" style="fill:var(--bg-soft);stroke:var(--border)"/>
+          <text x="110" y="22" text-anchor="middle" font-size="14" style="fill:var(--fg)">cat</text>
+        </g>
+        <g>
+          <rect x="160" y="0" width="60" height="36" rx="6" style="fill:var(--bg-soft);stroke:var(--border)"/>
+          <text x="190" y="22" text-anchor="middle" font-size="14" style="fill:var(--fg)">sat</text>
+        </g>
+        <g>
+          <rect x="240" y="0" width="60" height="36" rx="6" style="fill:var(--bg-soft);stroke:var(--border)"/>
+          <text x="270" y="22" text-anchor="middle" font-size="14" style="fill:var(--fg)">on</text>
+        </g>
+        <g>
+          <rect x="320" y="0" width="60" height="36" rx="6" style="fill:var(--brand-soft);stroke:var(--brand)"/>
+          <text x="350" y="22" text-anchor="middle" font-size="14" style="fill:var(--brand-strong);font-weight:600">?</text>
+        </g>
+        <text x="350" y="56" text-anchor="middle" font-size="11" style="fill:var(--fg-mute);">next token</text>
+      </g>
+
+      <!-- Big model block -->
+      <g transform="translate(20, 100)">
+        <rect x="0" y="0" width="540" height="48" rx="10" style="fill:var(--bg-soft);stroke:var(--border)"/>
+        <text x="270" y="30" text-anchor="middle" font-size="14" font-family="JetBrains Mono" style="fill:var(--fg)">TARGET MODEL. one forward pass per token</text>
+      </g>
+
+      <!-- GPU usage bar (mostly idle) -->
+      <g transform="translate(20, 170)">
+        <text x="0" y="-4" font-size="11" style="fill:var(--fg-mute);">GPU utilization</text>
+        <rect x="0" y="4" width="540" height="14" rx="7" style="fill:var(--bg-soft);stroke:var(--border)"/>
+        <rect x="0" y="4" width="120" height="14" rx="7" style="fill:var(--accent-2)" opacity="0.85">
+          <animate attributeName="width" values="0;540;0;120;540;0" dur="6s" repeatCount="indefinite"/>
+        </rect>
+      </g>
+
+      <text x="600" y="180" font-size="13" style="fill:var(--fg-soft);" font-family="Inter">~ one token</text>
+      <text x="600" y="200" font-size="13" style="fill:var(--fg-soft);" font-family="Inter">per 4ms+</text>
+
+      <!-- Divider -->
+      <line x1="20" y1="220" x2="860" y2="220" style="stroke:var(--border-soft)" stroke-dasharray="4 4"/>
+
+      <!-- Bottom row: speculative -->
+      <text x="20" y="246" font-family="JetBrains Mono" font-size="11" style="fill:var(--fg-mute);">SPECULATIVE</text>
+
+      <g transform="translate(20, 262)">
+        <g>
+          <rect x="0" y="0" width="60" height="36" rx="6" style="fill:var(--bg-soft);stroke:var(--border)"/>
+          <text x="30" y="22" text-anchor="middle" font-size="14" style="fill:var(--fg)">The</text>
+        </g>
+        <g>
+          <rect x="80" y="0" width="60" height="36" rx="6" style="fill:var(--bg-soft);stroke:var(--border)"/>
+          <text x="110" y="22" text-anchor="middle" font-size="14" style="fill:var(--fg)">cat</text>
+        </g>
+        <g>
+          <rect x="160" y="0" width="60" height="36" rx="6" style="fill:var(--bg-soft);stroke:var(--border)"/>
+          <text x="190" y="22" text-anchor="middle" font-size="14" style="fill:var(--fg)">sat</text>
+        </g>
+        <g>
+          <rect x="240" y="0" width="60" height="36" rx="6" style="fill:var(--bg-soft);stroke:var(--border)"/>
+          <text x="270" y="22" text-anchor="middle" font-size="14" style="fill:var(--fg)">on</text>
+        </g>
+        <!-- Draft guesses with sequential generation -->
+        <g>
+          <rect x="320" y="0" width="60" height="36" rx="6" style="fill:var(--accent-2);fill-opacity:0.18;stroke:var(--accent-2)"/>
+          <text x="350" y="22" text-anchor="middle" font-size="14" style="fill:var(--accent-2);font-weight:600">the</text>
+        </g>
+        <g>
+          <rect x="400" y="0" width="60" height="36" rx="6" style="fill:var(--accent-2);fill-opacity:0.18;stroke:var(--accent-2)"/>
+          <text x="430" y="22" text-anchor="middle" font-size="14" style="fill:var(--accent-2);font-weight:600">mat</text>
+        </g>
+        <g>
+          <rect x="480" y="0" width="60" height="36" rx="6" style="fill:var(--accent-2);fill-opacity:0.18;stroke:var(--accent-2)"/>
+          <text x="510" y="22" text-anchor="middle" font-size="14" style="fill:var(--accent-2);font-weight:600">.</text>
+        </g>
+        <text x="350" y="56" text-anchor="middle" font-size="11" style="fill:var(--fg-mute);">draft guesses</text>
+      </g>
+
+      <!-- Single verification pass -->
+      <g transform="translate(20, 312)">
+        <rect x="0" y="0" width="540" height="36" rx="10" style="fill:var(--brand-soft);stroke:var(--brand)"/>
+        <text x="270" y="22" text-anchor="middle" font-size="14" font-family="JetBrains Mono" style="fill:var(--brand-strong);font-weight:600">TARGET MODEL. ONE forward pass verifies all 3</text>
+      </g>
+    </svg>
+    <div class="diagram-caption">Vanilla decoding leaves the GPU idle between tokens. Speculative decoding batches verification across multiple draft tokens in parallel.</div>
+  </div>
+
+  <p>The wall-clock cost of generating <code>N</code> tokens is dominated by <code>N</code> sequential forward passes through a 7B–400B parameter model. Each pass costs the same whether the next token is the closing brace of a JSON block (trivially predictable) or a rare proper noun (very hard). Speculative decoding exploits that imbalance: cheap draft model handles the easy tokens, expensive target model only steps in to verify.</p>
+</section>
+
+<section class="container" id="walkthrough">
+  <div class="section-tag mono-label">Walkthrough</div>
+  <h2>Six things you actually need to know</h2>
+
+  <div class="walk-section">
+    <div class="step-num">01 / THE BOTTLENECK</div>
+    <div class="row">
+      <div>
+        <h3>Autoregressive decoding is one token per pass.</h3>
+        <p>For a 70B model on a single H100, generating 1000 tokens takes roughly 30 seconds at ~33 tokens per second. The arithmetic intensity per token is high, but the dependency chain is serial. You cannot generate the 100th token without first generating tokens 1 through 99, and you cannot start pass <code>k+1</code> until pass <code>k</code> finishes. The GPU is doing useful work, but it is doing it in a <em>chain</em>.</p>
+        <p>Throughput scales with batch size and with cheap tokens. Latency is bounded by the chain length and by the wall time of each forward pass. Speculative decoding attacks latency by breaking the chain: produce several tokens per chain link.</p>
+      </div>
+      <div class="diagram">
+        <svg viewBox="0 0 360 240" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Chain of forward passes">
+          <g transform="translate(20,20)">
+            <circle cx="20" cy="100" r="14" style="fill:var(--brand-soft);stroke:var(--brand)"/>
+            <text x="20" y="104" text-anchor="middle" font-size="11" style="fill:var(--brand-strong);font-weight:600">t1</text>
+            <circle cx="80" cy="100" r="14" style="fill:var(--brand-soft);stroke:var(--brand)"/>
+            <text x="80" y="104" text-anchor="middle" font-size="11" style="fill:var(--brand-strong);font-weight:600">t2</text>
+            <circle cx="140" cy="100" r="14" style="fill:var(--brand-soft);stroke:var(--brand)"/>
+            <text x="140" y="104" text-anchor="middle" font-size="11" style="fill:var(--brand-strong);font-weight:600">t3</text>
+            <circle cx="200" cy="100" r="14" style="fill:var(--brand-soft);stroke:var(--brand)"/>
+            <text x="200" y="104" text-anchor="middle" font-size="11" style="fill:var(--brand-strong);font-weight:600">t4</text>
+            <circle cx="260" cy="100" r="14" style="fill:var(--brand-soft);stroke:var(--brand)"/>
+            <text x="260" y="104" text-anchor="middle" font-size="11" style="fill:var(--brand-strong);font-weight:600">t5</text>
+            <circle cx="320" cy="100" r="14" style="fill:var(--brand-soft);stroke:var(--brand)"/>
+            <text x="320" y="104" text-anchor="middle" font-size="11" style="fill:var(--brand-strong);font-weight:600">t6</text>
+
+            <line x1="34" y1="100" x2="66" y2="100" style="stroke:var(--fg-mute)" marker-end="url(#arrow)"/>
+            <line x1="94" y1="100" x2="126" y2="100" style="stroke:var(--fg-mute)" marker-end="url(#arrow)"/>
+            <line x1="154" y1="100" x2="186" y2="100" style="stroke:var(--fg-mute)" marker-end="url(#arrow)"/>
+            <line x1="214" y1="100" x2="246" y2="100" style="stroke:var(--fg-mute)" marker-end="url(#arrow)"/>
+            <line x1="274" y1="100" x2="306" y2="100" style="stroke:var(--fg-mute)" marker-end="url(#arrow)"/>
+
+            <text x="170" y="40" text-anchor="middle" font-size="12" style="fill:var(--fg-mute);">6 forward passes</text>
+            <text x="170" y="170" text-anchor="middle" font-size="13" style="fill:var(--fg);font-weight:500">6 × T_fwd latency</text>
+          </g>
+        </svg>
+      </div>
+    </div>
+    <aside class="why"><span class="label">Why this matters</span>Every LLM API you have used has been rate-limited by this chain. Multi-token parallelization is the only way to cut it without changing the model weights.</aside>
+  </div>
+
+  <div class="walk-section">
+    <div class="step-num">02 / THE TRICK</div>
+    <div class="row">
+      <div>
+        <h3>Draft γ tokens cheaply, then verify in parallel.</h3>
+        <p>A small draft model. typically 1/20th the size, same tokenizer, same vocabulary. generates <code>γ</code> candidate tokens autoregressively, the same way the big model would. Each draft token costs ~5–10% of a target forward pass.</p>
+        <p>The target model then takes the whole proposed block plus the prefix, and runs <strong>one</strong> forward pass that scores every position in the block in parallel. The KV cache for the prefix is reused; the new attention only touches the <code>γ</code> draft positions.</p>
+        <p>The cost of one target forward pass over <code>γ</code> tokens is roughly the same as over a single token, because matrix multiplies are bandwidth-bound and the KV cache for the prefix is already on chip.</p>
+      </div>
+      <div class="diagram">
+        <svg viewBox="0 0 360 240" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Draft then verify with green and red accepts">
+          <defs>
+            <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 z" style="fill:var(--fg-mute)"/>
+            </marker>
+          </defs>
+          <!-- Prefix -->
+          <g transform="translate(20,20)">
+            <rect x="0" y="0" width="180" height="30" rx="6" style="fill:var(--bg-soft);stroke:var(--border)"/>
+            <text x="90" y="20" text-anchor="middle" font-size="12" style="fill:var(--fg)">prefix (KV cached)</text>
+          </g>
+
+          <!-- Draft model -->
+          <g transform="translate(20, 70)">
+            <rect x="0" y="0" width="320" height="32" rx="8" style="fill:var(--accent-2);fill-opacity:0.15;stroke:var(--accent-2)"/>
+            <text x="160" y="21" text-anchor="middle" font-size="13" style="fill:var(--accent-2);font-weight:600">DRAFT MODEL. generates γ = 4 tokens</text>
+          </g>
+          <!-- Draft tokens with arrows -->
+          <g transform="translate(20,110)">
+            <rect x="0" y="0" width="60" height="26" rx="4" style="fill:var(--accent-2);fill-opacity:0.18;stroke:var(--accent-2)"/>
+            <text x="30" y="18" text-anchor="middle" font-size="12" style="fill:var(--accent-2);font-weight:600">the</text>
+            <rect x="80" y="0" width="60" height="26" rx="4" style="fill:var(--brand);fill-opacity:0.25;stroke:var(--brand)">
+              <animate attributeName="r" values="0;3;0" dur="1.5s" repeatCount="indefinite"/>
+            </rect>
+            <text x="110" y="18" text-anchor="middle" font-size="12" style="fill:var(--brand-strong);font-weight:700">cat</text>
+            <rect x="160" y="0" width="60" height="26" rx="4" style="fill:var(--accent-2);fill-opacity:0.18;stroke:var(--accent-2)"/>
+            <text x="190" y="18" text-anchor="middle" font-size="12" style="fill:var(--accent-2);font-weight:600">sat</text>
+            <rect x="240" y="0" width="60" height="26" rx="4" style="fill:var(--accent-2);fill-opacity:0.18;stroke:var(--accent-2)"/>
+            <text x="270" y="18" text-anchor="middle" font-size="12" style="fill:var(--accent-2);font-weight:600">down</text>
+            <line x1="60" y1="13" x2="80" y2="13" style="stroke:var(--fg-mute)" marker-end="url(#ar)"/>
+            <line x1="140" y1="13" x2="160" y2="13" style="stroke:var(--fg-mute)" marker-end="url(#ar)"/>
+            <line x1="220" y1="13" x2="240" y2="13" style="stroke:var(--fg-mute)" marker-end="url(#ar)"/>
+          </g>
+
+          <!-- Target verification -->
+          <g transform="translate(20, 156)">
+            <rect x="0" y="0" width="320" height="32" rx="8" style="fill:var(--brand-soft);stroke:var(--brand)"/>
+            <text x="160" y="21" text-anchor="middle" font-size="13" style="fill:var(--brand-strong);font-weight:600">TARGET. ONE pass scores all 4</text>
+          </g>
+
+          <!-- Accept/reject outcome -->
+          <g transform="translate(20, 200)">
+            <text x="0" y="14" font-size="11" style="fill:var(--brand-strong);font-weight:600">accept cat (1st mismatch: down → on)</text>
+            <text x="0" y="32" font-size="11" style="fill:var(--accent-2);font-weight:600">bonus sample from target distribution</text>
+          </g>
+        </svg>
+      </div>
+    </div>
+    <aside class="why"><span class="label">Why this matters</span>One target forward pass amortized across γ tokens is the entire economic case. If you can score 4 tokens for the price of 1, every other constant matters less.</aside>
+  </div>
+
+  <div class="walk-section">
+    <div class="step-num">03 / THE MATH</div>
+    <div class="row">
+      <div>
+        <h3>Rejection sampling is what makes it lossless.</h3>
+        <p>This is the non-obvious part. The draft model is wrong sometimes, so why doesn't the output drift? The answer is that <strong>acceptance is decided by the target model's own distribution, not the draft's</strong>.</p>
+        <p>Concretely: for each draft token <code>x_i</code>, compute <code>p = p_target(x_i | prefix)</code> and <code>q = p_draft(x_i | prefix)</code>. Accept with probability <code>min(1, p/q)</code>. If the draft is more confident than the target, it accepts almost always. If the draft is less confident than the target, it sometimes rejects.</p>
+        <p>When a rejection happens, sample a replacement from a corrected distribution and stop the block. This correction exactly preserves the target distribution: across all possible draft proposals, the verifier's accept-or-resample rule makes the <em>marginal</em> distribution of every output token identical to plain greedy / sampling from the target.</p>
+        <p>The expected number of accepted tokens per round depends on how well the draft distribution matches the target. A 7B draft targeting a 70B model averages 2–4 accepts per block on chat data, which is enough for a 2x–4x speedup at low draft cost.</p>
+      </div>
+      <div class="diagram">
+        <svg viewBox="0 0 360 240" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Rejection sampling acceptance rule">
+          <g transform="translate(20,20)">
+            <text x="0" y="14" font-family="JetBrains Mono" font-size="11" style="fill:var(--fg-mute);">ACCEPTANCE PROBABILITY</text>
+            <rect x="0" y="24" width="320" height="42" rx="8" style="fill:var(--bg-soft);stroke:var(--border)"/>
+            <text x="160" y="50" text-anchor="middle" font-family="JetBrains Mono" font-size="14" style="fill:var(--brand-strong);font-weight:600">P(accept) = min(1, p_target / p_draft)</text>
+
+            <text x="0" y="92" font-family="JetBrains Mono" font-size="11" style="fill:var(--fg-mute);">PER-ROUND LATENCY</text>
+            <rect x="0" y="102" width="320" height="42" rx="8" style="fill:var(--bg-soft);stroke:var(--border)"/>
+            <text x="160" y="128" text-anchor="middle" font-family="JetBrains Mono" font-size="14" style="fill:var(--fg);font-weight:500">L = (T_draft + T_verify) / τ</text>
+
+            <text x="0" y="170" font-family="JetBrains Mono" font-size="11" style="fill:var(--fg-mute);">SPEEDUP</text>
+            <rect x="0" y="180" width="320" height="42" rx="8" style="fill:var(--brand-soft);stroke:var(--brand)"/>
+            <text x="160" y="206" text-anchor="middle" font-family="JetBrains Mono" font-size="14" style="fill:var(--brand-strong);font-weight:700">η = T_verify / L  →  2x to 5x typical</text>
+          </g>
+        </svg>
+      </div>
+    </div>
+    <aside class="why"><span class="label">Why this matters</span>Lossless means you can flip the switch without retraining, without re-evaluating, without telling downstream users. It is the only inference optimization that ships for free.</aside>
+  </div>
+
+  <div class="walk-section">
+    <div class="step-num">04 / THE COST MODEL</div>
+    <div class="row">
+      <div>
+        <h3>The speedup is τ × (T_draft + T_verify), not just T_verify.</h3>
+        <p>Three numbers matter. <code>T_draft</code> is the wall time to produce γ draft tokens. <code>T_verify</code> is one target forward pass over the prefix plus γ new tokens. <code>τ</code> is the expected number of accepted tokens per round.</p>
+        <p>If your draft is too big, <code>T_draft</code> eats the savings. If your draft is too dumb, <code>τ</code> collapses and verification dominates. The optimal draft size depends on the model pair: for a 70B target, a 1B–7B draft usually wins. For a 400B target, a 30B draft can pay for itself.</p>
+        <p>On Qwen3-8B serving a single request on a B200, vanilla decoding produces ~230 tokens/second. With a DFlash draft model, that climbs to ~630 tokens/second on conversational text, roughly 2.75x. Math is a different story because rare numbers are hard to predict and τ drops.</p>
+      </div>
+      <div class="diagram">
+        <svg viewBox="0 0 360 280" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Speedup math breakdown">
+          <g transform="translate(20,20)">
+            <text x="0" y="0" font-family="JetBrains Mono" font-size="11" style="fill:var(--fg-mute);">EXAMPLE: QWEN3-8B ON ONE B200</text>
+
+            <!-- bar chart -->
+            <g transform="translate(0,20)">
+              <text x="0" y="20" font-size="12" style="fill:var(--fg);">vanilla</text>
+              <rect x="80" y="6" width="115" height="22" rx="4" style="fill:var(--accent-2);fill-opacity:0.7"/>
+              <text x="200" y="22" font-size="12" style="fill:var(--fg-soft);">230 tok/s</text>
+
+              <text x="0" y="60" font-size="12" style="fill:var(--fg);">+ draft (DFlash)</text>
+              <rect x="80" y="46" width="315" height="22" rx="4" style="fill:var(--brand)">
+                <animate attributeName="width" values="115;315" dur="1.6s" fill="freeze"/>
+              </rect>
+              <text x="400" y="62" font-size="12" style="fill:var(--brand-strong);font-weight:600">~630 tok/s</text>
+
+              <text x="0" y="100" font-size="12" style="fill:var(--fg-mute);">math, low τ</text>
+              <rect x="80" y="86" width="175" height="22" rx="4" style="fill:var(--accent-2);fill-opacity:0.45"/>
+              <text x="260" y="102" font-size="12" style="fill:var(--fg-mute);">~350 tok/s</text>
+            </g>
+
+            <!-- math -->
+            <g transform="translate(0,160)">
+              <rect x="0" y="0" width="320" height="100" rx="10" style="fill:var(--bg-soft);stroke:var(--border)"/>
+              <text x="14" y="22" font-family="JetBrains Mono" font-size="11" style="fill:var(--fg-mute);">T_verify = 4.3 ms (1 fwd pass)</text>
+              <text x="14" y="44" font-family="JetBrains Mono" font-size="11" style="fill:var(--fg-mute);">T_draft  = 1.3 ms (γ=4 proposed)</text>
+              <text x="14" y="66" font-family="JetBrains Mono" font-size="11" style="fill:var(--fg-mute);">τ        = 3 accepted per round</text>
+              <text x="14" y="88" font-family="JetBrains Mono" font-size="12" style="fill:var(--brand-strong);font-weight:600">L = (1.3 + 4.3) / 3 = 1.9 ms/token</text>
+            </g>
+          </g>
+        </svg>
+      </div>
+    </div>
+    <aside class="why"><span class="label">Why this matters</span>If you cannot measure τ on representative traffic, you cannot know whether speculative decoding will pay off in your stack. A 1.1x speedup is a write-off; a 3x speedup changes your unit economics.</aside>
+  </div>
+
+  <div class="walk-section">
+    <div class="step-num">05 / THE FOUR GENERATIONS</div>
+    <div class="row">
+      <div>
+        <h3>Each generation attacks one of T_draft, T_verify, or τ.</h3>
+        <p>Lossless speculative decoding is from 2023. The interesting work since then has been incremental, and it is worth knowing which lever each one pulls.</p>
+        <p><strong>EAGLE / EAGLE-3 (NeurIPS 2025)</strong> makes the draft itself a feature-fused head on top of the target, so its hidden states match the target's. Higher τ, same verify cost.</p>
+        <p><strong>DFlash (ICML 2026)</strong> replaces autoregressive drafting with a parallel diffusion block: produce the whole γ-token block in one shot. Lower T_draft, slightly lower τ.</p>
+        <p><strong>DSpark (DeepSeek, 2026)</strong> builds a custom verification kernel that fuses the rejection-sampling check into the target forward pass. Lower T_verify, same τ.</p>
+        <p><strong>DFlash 2 (Inco AI, 2026)</strong> combines a larger acceptance head with a smarter verifier. The arms race is still open.</p>
+      </div>
+      <div class="diagram">
+        <svg viewBox="0 0 360 280" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Four generations and which cost they attack">
+          <g transform="translate(20,20)">
+            <text x="0" y="0" font-family="JetBrains Mono" font-size="11" style="fill:var(--fg-mute);">FOUR GENERATIONS</text>
+
+            <g transform="translate(0,16)">
+              <!-- EAGLE-3 -->
+              <rect x="0" y="0" width="320" height="46" rx="8" style="fill:var(--bg-soft);stroke:var(--border)"/>
+              <text x="12" y="18" font-size="13" style="fill:var(--fg);font-weight:600">EAGLE-3</text>
+              <text x="12" y="34" font-size="11" style="fill:var(--fg-mute);">higher τ (better draft head)</text>
+              <text x="290" y="29" text-anchor="end" font-family="JetBrains Mono" font-size="11" style="fill:var(--brand-strong);">NeurIPS 2025</text>
+
+              <!-- DFlash -->
+              <g transform="translate(0,56)">
+                <rect x="0" y="0" width="320" height="46" rx="8" style="fill:var(--bg-soft);stroke:var(--border)"/>
+                <text x="12" y="18" font-size="13" style="fill:var(--fg);font-weight:600">DFlash</text>
+                <text x="12" y="34" font-size="11" style="fill:var(--fg-mute);">lower T_draft (parallel block)</text>
+                <text x="290" y="29" text-anchor="end" font-family="JetBrains Mono" font-size="11" style="fill:var(--brand-strong);">ICML 2026</text>
+              </g>
+
+              <!-- DSpark -->
+              <g transform="translate(0,112)">
+                <rect x="0" y="0" width="320" height="46" rx="8" style="fill:var(--bg-soft);stroke:var(--border)"/>
+                <text x="12" y="18" font-size="13" style="fill:var(--fg);font-weight:600">DSpark</text>
+                <text x="12" y="34" font-size="11" style="fill:var(--fg-mute);">lower T_verify (fused kernel)</text>
+                <text x="290" y="29" text-anchor="end" font-family="JetBrains Mono" font-size="11" style="fill:var(--brand-strong);">DeepSeek 2026</text>
+              </g>
+
+              <!-- DFlash 2 -->
+              <g transform="translate(0,168)">
+                <rect x="0" y="0" width="320" height="46" rx="8" style="fill:var(--bg-soft);stroke:var(--brand)"/>
+                <text x="12" y="18" font-size="13" style="fill:var(--brand-strong);font-weight:600">DFlash 2</text>
+                <text x="12" y="34" font-size="11" style="fill:var(--fg-mute);">τ + T_verify combined</text>
+                <text x="290" y="29" text-anchor="end" font-family="JetBrains Mono" font-size="11" style="fill:var(--brand-strong);">Inco AI 2026</text>
+              </g>
+            </g>
+          </g>
+        </svg>
+      </div>
+    </div>
+    <aside class="why"><span class="label">Why this matters</span>If you only have time to follow the field, follow τ and T_verify. T_draft is already saturated by parallel drafting, and most of the next 10–20% gains will come from squeezing the verifier kernel.</aside>
+  </div>
+
+  <div class="walk-section">
+    <div class="step-num">06 / WHEN IT DOES NOT PAY</div>
+    <div class="row">
+      <div>
+        <h3>The amortized case breaks for long-form math, code with unique identifiers, and tiny batches.</h3>
+        <p>Speculative decoding assumes the target's verification pass costs about the same as a single-token forward pass. That assumption holds for the prefix, but the γ new tokens add KV cache writes that are not free on memory-bound hardware. If γ is too large for the available HBM bandwidth, T_verify starts to drift up linearly with γ.</p>
+        <p>It also assumes the draft distribution is close to the target. On tasks where next-token entropy is high. long division, multi-step symbolic reasoning, generating UUIDs, picking arbitrary but correct API parameter names. the draft model is wrong often, τ drops toward 1, and you are paying draft cost for nothing.</p>
+        <p>And it assumes you have spare FLOPs for the draft. On a fully batched serving stack where every FLOP is already going to target tokens, the draft is pure overhead. The break-even point is roughly <strong>batch size &lt; 8</strong> for chat traffic, and closer to <strong>batch size &lt; 2</strong> for code completion traffic.</p>
+      </div>
+      <div class="diagram">
+        <svg viewBox="0 0 360 240" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="When speculative decoding does not pay">
+          <g transform="translate(20,20)">
+            <text x="0" y="0" font-family="JetBrains Mono" font-size="11" style="fill:var(--fg-mute);">τ BY TASK (TYPICAL)</text>
+
+            <g transform="translate(0,16)">
+              <text x="0" y="20" font-size="12" style="fill:var(--fg);">chat</text>
+              <rect x="80" y="6" width="220" height="22" rx="4" style="fill:var(--brand)"/>
+              <text x="310" y="22" font-size="11" style="fill:var(--fg-soft);">τ ≈ 3.4</text>
+
+              <text x="0" y="60" font-size="12" style="fill:var(--fg);">code completion</text>
+              <rect x="80" y="46" width="170" height="22" rx="4" style="fill:var(--accent-2);fill-opacity:0.7"/>
+              <text x="260" y="62" font-size="11" style="fill:var(--fg-soft);">τ ≈ 2.5</text>
+
+              <text x="0" y="100" font-size="12" style="fill:var(--fg);">math reasoning</text>
+              <rect x="80" y="86" width="90" height="22" rx="4" style="fill:var(--accent-2);fill-opacity:0.45"/>
+              <text x="180" y="102" font-size="11" style="fill:var(--fg-soft);">τ ≈ 1.4</text>
+
+              <text x="0" y="140" font-size="12" style="fill:var(--fg);">UUID / random IDs</text>
+              <rect x="80" y="126" width="40" height="22" rx="4" style="fill:var(--accent-2);fill-opacity:0.3"/>
+              <text x="130" y="142" font-size="11" style="fill:var(--fg-soft);">τ ≈ 1.0</text>
+            </g>
+
+            <text x="0" y="200" font-size="12" style="fill:var(--fg-mute);">Below τ ≈ 1.5, draft cost dominates.</text>
+            <text x="0" y="220" font-size="12" style="fill:var(--fg-mute);">Spec decode is overhead, not speedup.</text>
+          </g>
+        </svg>
+      </div>
+    </div>
+    <aside class="why"><span class="label">Why this matters</span>The default mode for code agents and reasoning chains should be speculative OFF, with a router that flips it on only for chat-style conversational blocks. Most teams ship the opposite and lose 15% throughput.</aside>
+  </div>
+</section>
+
+<section class="container" id="confusions">
+  <div class="section-tag mono-label">Common Confusions</div>
+  <h2>Four things people get wrong</h2>
+
+  <div class="confusion-grid">
+    <div class="conf-card">
+      <div class="conf-q">"Speculative decoding is just an approximate method that occasionally degrades quality."</div>
+      <div class="conf-a">No. The standard version is mathematically lossless. the output distribution is identical to greedy or sampling from the target alone. Approximate variants exist, but the original Chen and Leviathan papers, and every mainstream engine (vLLM, SGLang, TGI), ship the lossless version by default. If your outputs changed, you are using approximate decoding, not the standard algorithm.</div>
+    </div>
+    <div class="conf-card">
+      <div class="conf-q">"The draft model needs to be trained on the same data."</div>
+      <div class="conf-a">Not exactly. It needs the same tokenizer and roughly the same distribution. In practice people train a small model on a distilled version of the target's outputs (EAGLE does this), or use a smaller sibling from the same family (Qwen3-1.7B drafting for Qwen3-8B). A randomly chosen 7B model drafting for a 70B Llama will work but will have low τ because its distribution diverges.</div>
+    </div>
+    <div class="conf-card">
+      <div class="conf-q">"Bigger γ always helps."</div>
+      <div class="conf-a">No. γ = 3 to 8 is the usual sweet spot. Past γ = 8, the probability that all proposed tokens are accepted drops fast, so the marginal draft cost grows faster than the marginal accept count. Memory pressure from KV cache writes for the γ tokens also rises. Engines like vLLM default γ = 5 for chat and let you tune per workload.</div>
+    </div>
+    <div class="conf-card">
+      <div class="conf-q">"Speculative decoding cuts training cost too."</div>
+      <div class="conf-a">No. It only helps inference. Training already runs in large parallel batches and is throughput-bound, not latency-bound. The chain dependency that hurts inference is hidden by gradient accumulation in training. If you are optimizing training cost, look at FlashAttention, ZeRO sharding, or sequence parallelism. not speculative decoding.</div>
+    </div>
+  </div>
+</section>
+
+<section class="container" id="next">
+  <div class="section-tag mono-label">Where To Go Next</div>
+  <h2>Three specific places to dig deeper</h2>
+
+  <ul class="next-list">
+    <li>
+      <span class="kind">PAPER · LOSSY-FREE FOUNDATION</span>
+      <div class="title">Leviathan, Kalman, Matias. <em>Fast Inference from Transformers via Speculative Decoding</em> (ICML 2023)</div>
+      <div class="desc">The original paper. Read section 3 for the rejection-sampling proof that the output distribution is preserved. It is six pages and it is the math you wish someone had shown you the first time. <a href="https://arxiv.org/abs/2211.17192">arxiv.org/abs/2211.17192</a></div>
+    </li>
+    <li>
+      <span class="kind">TUTORIAL · STAFF-LEVEL DEEP DIVE</span>
+      <div class="title"><em>Speculative Decoding: How It Evolved, When It Stays Lossless, and What's Next</em>. NeurIPS 2026 Education Track</div>
+      <div class="desc">Walk through the math, run four generations of draft models against Qwen3-8B, and measure τ yourself. Includes a Losslessbench that checks the output distribution bit-for-bit. This is the single best end-to-end resource right now. <a href="https://neurips2026-speculative-decoding.vercel.app/">neurips2026-speculative-decoding.vercel.app</a></div>
+    </li>
+    <li>
+      <span class="kind">HANDS-ON · SHIP IT YOURSELF</span>
+      <div class="title">vLLM's <code>--speculative-model</code> flag, with EAGLE-3 or DFlash</div>
+      <div class="desc">Spin up vLLM, point <code>--speculative-model</code> at a pre-trained EAGLE-3 or DFlash draft for your base model, and measure tokens/second on a representative prompt set. Most teams see a 2x–3x lift on chat traffic within an hour. The flag is one line; the evaluation rig is the hard part.</div>
+    </li>
+  </ul>
+</section>
+
+<footer>
+  <div class="container">
+    Day 2 of the explainer series. Built by Hermes using the explainer-builder skill.
+  </div>
+</footer>
+
+<script>
+  (function(){
+    var btn = document.getElementById('theme-toggle');
+    var label = document.getElementById('theme-label');
+    var root = document.documentElement;
+    function update() {
+      var t = root.getAttribute('data-theme');
+      label.textContent = t === 'dark' ? 'Dark' : 'Light';
+    }
+    update();
+    btn.addEventListener('click', function(){
+      var cur = root.getAttribute('data-theme');
+      var next = cur === 'dark' ? 'light' : 'dark';
+      root.setAttribute('data-theme', next);
+      try { localStorage.setItem('theme', next); } catch(e) {}
+      update();
+    });
+  })();
+</script>
+</body>
+</html>
