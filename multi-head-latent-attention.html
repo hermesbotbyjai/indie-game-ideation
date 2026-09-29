@@ -1,0 +1,1142 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Multi-Head Latent Attention: Compressing the KV cache into a low-rank latent</title>
+<meta name="description" content="How DeepSeek's MLA cuts KV cache memory 10x by storing one latent vector per token instead of per-head keys and values.">
+<script>
+(function(){
+  try {
+    var t = localStorage.getItem('theme');
+    var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    var theme = t || (prefersDark ? 'dark' : 'light');
+    document.documentElement.setAttribute('data-theme', theme);
+  } catch(e){}
+})();
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #ffffff;
+  --bg-soft: rgba(13,13,13,0.04);
+  --bg-elev: #fafafa;
+  --text: #0d0d0d;
+  --text-mute: rgba(13,13,13,0.6);
+  --text-dim: rgba(13,13,13,0.45);
+  --border: rgba(13,13,13,0.08);
+  --border-strong: rgba(13,13,13,0.14);
+  --accent: #18E299;
+  --accent-hover: #14c485;
+  --accent-soft: rgba(24,226,153,0.10);
+  --accent-line: rgba(24,226,153,0.30);
+  --warning: #f59e0b;
+  --danger: #ef4444;
+  --shadow-sm: 0 1px 2px rgba(13,13,13,0.04);
+  --shadow-md: 0 4px 24px rgba(13,13,13,0.06);
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 18px;
+  --gutter: 24px;
+  --max: 1200px;
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: 'Geist Mono', ui-monospace, monospace;
+}
+[data-theme="dark"] {
+  --bg: #0a0a0a;
+  --bg-soft: rgba(255,255,255,0.04);
+  --bg-elev: #111111;
+  --text: #f5f5f5;
+  --text-mute: rgba(255,255,255,0.65);
+  --text-dim: rgba(255,255,255,0.45);
+  --border: rgba(255,255,255,0.10);
+  --border-strong: rgba(255,255,255,0.18);
+  --accent: #2af5a8;
+  --accent-hover: #4dffba;
+  --accent-soft: rgba(42,245,168,0.12);
+  --accent-line: rgba(42,245,168,0.35);
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.3);
+  --shadow-md: 0 4px 24px rgba(0,0,0,0.4);
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  font-family: var(--font-sans);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 17px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+.container {
+  max-width: var(--max);
+  margin: 0 auto;
+  padding: 0 var(--gutter);
+}
+.nav {
+  position: sticky; top: 0; z-index: 100;
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  backdrop-filter: saturate(180%) blur(14px);
+  border-bottom: 1px solid var(--border);
+}
+.nav-inner {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 0;
+}
+.nav-brand {
+  font-weight: 700; font-size: 16px;
+  display: flex; align-items: center; gap: 10px;
+}
+.nav-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 12px var(--accent-line);
+}
+.nav-links { display: flex; gap: 20px; align-items: center; }
+.nav-link {
+  font-size: 14px; color: var(--text-mute);
+  text-decoration: none; padding: 6px 10px; border-radius: 6px;
+  transition: color 160ms ease, background 160ms ease;
+}
+.nav-link:hover { color: var(--text); background: var(--bg-soft); }
+.theme-toggle {
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  border-radius: 9999px;
+  padding: 6px 12px;
+  font-size: 13px;
+  font-family: var(--font-mono);
+  cursor: pointer;
+  color: var(--text-mute);
+  transition: all 160ms ease;
+}
+.theme-toggle:hover {
+  border-color: var(--accent-line);
+  color: var(--text);
+}
+
+/* HERO */
+.hero {
+  position: relative;
+  padding: 80px 0 60px;
+  overflow: hidden;
+}
+.hero::before {
+  content: "";
+  position: absolute; inset: 0;
+  background:
+    radial-gradient(ellipse 1200px 600px at 50% -10%, var(--accent-soft), transparent 60%),
+    linear-gradient(180deg, transparent 0%, var(--bg) 100%);
+  pointer-events: none;
+}
+.hero-inner { position: relative; }
+.label {
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  font-weight: 500;
+  color: var(--text-mute);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.label::before {
+  content: "";
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--accent);
+}
+h1 {
+  font-size: 64px;
+  line-height: 1.05;
+  font-weight: 800;
+  letter-spacing: -0.025em;
+  margin: 18px 0 22px;
+  max-width: 14ch;
+}
+h1 em {
+  font-style: normal;
+  background: linear-gradient(120deg, var(--accent), var(--accent-hover));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.tagline {
+  font-size: 21px;
+  color: var(--text-mute);
+  max-width: 640px;
+  margin: 0 0 36px;
+}
+.get-list {
+  display: flex; flex-wrap: wrap; gap: 12px;
+  margin-bottom: 40px;
+}
+.get-pill {
+  border: 1px solid var(--border);
+  border-radius: 9999px;
+  padding: 8px 16px;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--bg-soft);
+  font-family: var(--font-mono);
+}
+
+/* MODEL CALLOUT */
+.model-callout {
+  border: 1px solid var(--accent-line);
+  background: var(--accent-soft);
+  border-radius: var(--radius-lg);
+  padding: 28px 32px;
+  margin: 60px 0;
+  position: relative;
+}
+.model-callout .label { color: var(--accent-hover); margin-bottom: 12px; }
+.model-sentence {
+  font-size: 22px;
+  font-weight: 500;
+  line-height: 1.4;
+  margin: 0;
+  letter-spacing: -0.01em;
+}
+
+/* SECTIONS */
+section { padding: 60px 0; }
+h2 {
+  font-size: 40px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin: 0 0 8px;
+  line-height: 1.15;
+}
+h2 + .label { margin-bottom: 28px; }
+h3 {
+  font-size: 24px;
+  font-weight: 600;
+  margin: 36px 0 12px;
+  letter-spacing: -0.01em;
+}
+p { margin: 0 0 18px; }
+p.lead { font-size: 19px; color: var(--text-mute); }
+code {
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+}
+
+/* DIAGRAMS */
+.diagram-wrap {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 32px;
+  margin: 28px 0;
+  overflow-x: auto;
+}
+.diagram-wrap svg { display: block; max-width: 100%; height: auto; }
+.diagram-caption {
+  font-size: 13px;
+  color: var(--text-dim);
+  text-align: center;
+  margin-top: 16px;
+  font-family: var(--font-mono);
+}
+
+/* WHY ASIDE */
+.why-aside {
+  border-left: 3px solid var(--accent);
+  background: var(--bg-soft);
+  padding: 16px 22px;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  margin: 24px 0;
+  font-size: 15px;
+}
+.why-aside strong {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--accent-hover);
+  display: block;
+  margin-bottom: 6px;
+  font-weight: 600;
+}
+
+/* CONFUSIONS */
+.confusions {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 18px;
+  margin: 32px 0;
+}
+@media (min-width: 720px) {
+  .confusions { grid-template-columns: 1fr 1fr; }
+}
+.confusion-card {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 24px;
+}
+.confusion-num {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-bottom: 8px;
+  letter-spacing: 0.05em;
+}
+.confusion-q {
+  font-size: 17px;
+  font-weight: 600;
+  margin: 0 0 10px;
+  color: var(--text);
+}
+.confusion-a {
+  font-size: 15px;
+  color: var(--text-mute);
+  margin: 0;
+  line-height: 1.5;
+}
+
+/* NEXT STEPS */
+.next-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 16px;
+  margin: 28px 0;
+}
+@media (min-width: 720px) {
+  .next-grid { grid-template-columns: repeat(3, 1fr); }
+}
+.next-card {
+  border: 1px solid var(--border);
+  background: var(--bg-elev);
+  border-radius: var(--radius-md);
+  padding: 22px;
+  text-decoration: none;
+  color: var(--text);
+  transition: all 180ms ease;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.next-card:hover {
+  border-color: var(--accent-line);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+}
+.next-tag {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--accent-hover);
+  font-weight: 600;
+}
+.next-title {
+  font-size: 16px;
+  font-weight: 600;
+  margin: 0;
+  line-height: 1.3;
+}
+.next-meta {
+  font-size: 13px;
+  color: var(--text-mute);
+}
+
+/* FOOTER */
+footer {
+  border-top: 1px solid var(--border);
+  padding: 36px 0;
+  margin-top: 60px;
+  font-size: 14px;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+}
+
+/* ANIMATIONS */
+@keyframes pulseDot {
+  0%, 100% { opacity: 0.5; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.15); }
+}
+@keyframes drawLine {
+  from { stroke-dashoffset: 100%; }
+  to { stroke-dashoffset: 0; }
+}
+@keyframes floatUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes flowAccent {
+  0% { stroke-dashoffset: 0; }
+  100% { stroke-dashoffset: -40; }
+}
+@keyframes flashAccent {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+@keyframes growBar {
+  from { transform: scaleY(0); }
+  to { transform: scaleY(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
+}
+
+/* MOBILE */
+@media (max-width: 720px) {
+  h1 { font-size: 44px; }
+  h2 { font-size: 32px; }
+  section { padding: 40px 0; }
+  .hero { padding: 50px 0 30px; }
+  .nav-links { display: none; }
+  .diagram-wrap { padding: 20px; }
+  .model-callout { padding: 20px 22px; }
+  .model-sentence { font-size: 18px; }
+}
+
+/* UTIL */
+.mt-0 { margin-top: 0; }
+.text-mute { color: var(--text-mute); }
+</style>
+</head>
+<body>
+
+<nav class="nav">
+  <div class="container nav-inner">
+    <div class="nav-brand">
+      <span class="nav-dot"></span>
+      <span>Daily Explainer</span>
+    </div>
+    <div class="nav-links">
+      <a class="nav-link" href="#model">The model</a>
+      <a class="nav-link" href="#walkthrough">Walkthrough</a>
+      <a class="nav-link" href="#confusions">Confusions</a>
+      <a class="nav-link" href="#next">Next</a>
+      <button class="theme-toggle" id="themeBtn" aria-label="Toggle theme">theme</button>
+    </div>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="container hero-inner">
+    <span class="label">Day 3 — Inference · KV cache · Attention</span>
+    <h1>Multi-Head Latent Attention: one <em>latent vector</em> per token, not per head.</h1>
+    <p class="tagline">The single trick that took DeepSeek from a 93% KV cache cut (V2) to a 437x cut (V4.1-Flash), and let them ship a 1M-context MoE without melting your HBM.</p>
+    <div class="get-list">
+      <span class="get-pill">Why MQA and GQA only get you so far</span>
+      <span class="get-pill">The low-rank KV joint compression math</span>
+      <span class="get-pill">How MLA coexists with position info (decoupled RoPE)</span>
+      <span class="get-pill">The 437x story from V1 → V4.1-Flash</span>
+    </div>
+  </div>
+</header>
+
+<div class="container">
+  <div class="model-callout" id="model">
+    <span class="label">The model in one sentence</span>
+    <p class="model-sentence">Standard attention stores a separate <code>K</code> and <code>V</code> vector for every head and every past token, while MLA compresses both into a single shared low-rank latent per token and reconstructs the per-head <code>K</code> and <code>V</code> on the fly during attention.</p>
+  </div>
+</div>
+
+<section>
+  <div class="container">
+    <span class="label">Mental model</span>
+    <h2>The whole thing in one picture.</h2>
+    <p class="lead">Every token carries one small <code>c<sub>t</sub></code> through the cache. The full per-head <code>K</code>, <code>V</code> matrices are computed on the fly from that latent plus the token's input. The cache footprint shrinks to whatever fits in <code>c<sub>t</sub></code>.</p>
+
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 720 360" role="img" aria-label="Standard MHA versus MLA: per-head KV cache versus single latent per token">
+        <style>
+          .box { stroke: var(--border-strong); fill: var(--bg-elev); }
+          .box-mha { fill: rgba(239,68,68,0.08); stroke: rgba(239,68,68,0.4); }
+          .box-mla { fill: rgba(24,226,153,0.10); stroke: var(--accent-line); }
+          .lbl { font-family: var(--font-mono); font-size: 11px; fill: var(--text); }
+          .lbl-mute { font-family: var(--font-mono); font-size: 10px; fill: var(--text-mute); }
+          .lbl-tiny { font-family: var(--font-mono); font-size: 9px; fill: var(--text-dim); }
+          .arrow { stroke: var(--text-dim); stroke-width: 1.2; fill: none; }
+          .arrow-accent { stroke: var(--accent); stroke-width: 1.5; fill: none; }
+          .dot { fill: var(--accent); }
+          .arrowhead { fill: var(--text-dim); }
+          .pulse { animation: pulseDot 2.4s ease-in-out infinite; transform-origin: center; transform-box: fill-box; }
+        </style>
+
+        <!-- Left: MHA -->
+        <text x="20" y="30" class="lbl" style="font-size:13px; font-weight:600;">MHA: cache grows like heads × dim × tokens</text>
+        <g transform="translate(20,60)">
+          <text x="0" y="0" class="lbl-mute">token t=1</text>
+          <text x="0" y="14" class="lbl-mute">token t=2</text>
+          <text x="0" y="28" class="lbl-mute">token t=3</text>
+          <text x="0" y="42" class="lbl-mute">token t=4</text>
+          <text x="0" y="56" class="lbl-mute">token t=5</text>
+
+          <!-- 8 heads x 2 (K,V) boxes per token -->
+          <g transform="translate(80,0)">
+            <rect class="box box-mha" x="0" y="-12" width="42" height="14" rx="2"/>
+            <rect class="box box-mha" x="46" y="-12" width="42" height="14" rx="2"/>
+            <rect class="box box-mha" x="92" y="-12" width="42" height="14" rx="2"/>
+            <rect class="box box-mha" x="138" y="-12" width="42" height="14" rx="2"/>
+            <rect class="box box-mha" x="184" y="-12" width="42" height="14" rx="2"/>
+            <rect class="box box-mha" x="230" y="-12" width="42" height="14" rx="2"/>
+            <rect class="box box-mha" x="0" y="2" width="42" height="14" rx="2"/>
+            <rect class="box box-mha" x="46" y="2" width="42" height="14" rx="2"/>
+            <rect class="box box-mha" x="92" y="2" width="42" height="14" rx="2"/>
+            <rect class="box box-mha" x="138" y="2" width="42" height="14" rx="2"/>
+            <rect class="box box-mha" x="184" y="2" width="42" height="14" rx="2"/>
+            <rect class="box box-mha" x="230" y="2" width="42" height="14" rx="2"/>
+
+            <rect class="box box-mha" x="0" y="16" width="42" height="14" rx="2"/>
+            <rect class="box box-mha" x="46" y="16" width="42" height="14" rx="2"/>
+            <rect class="box box-mha" x="92" y="16" width="42" height="14" rx="2"/>
+            <rect class="box box-mha" x="138" y="16" width="42" height="14" rx="2"/>
+            <rect class="box box-mha" x="184" y="16" width="42" height="14" rx="2"/>
+            <rect class="box box-mha" x="230" y="16" width="42" height="14" rx="2"/>
+            <rect class="box box-mha" x="0" y="30" width="42" height="14" rx="2"/>
+            <rect class="box box-mha" x="46" y="30" width="42" height="14" rx="2"/>
+            <rect class="box box-mha" x="92" y="30" width="42" height="14" rx="2"/>
+            <rect class="box box-mha" x="138" y="30" width="42" height="14" rx="2"/>
+            <rect class="box box-mha" x="184" y="30" width="42" height="14" rx="2"/>
+            <rect class="box box-mha" x="230" y="30" width="42" height="14" rx="2"/>
+
+            <rect class="box box-mha" x="0" y="44" width="42" height="14" rx="2"/>
+            <rect class="box box-mha" x="46" y="44" width="42" height="14" rx="2"/>
+            <rect class="box box-mha" x="92" y="44" width="42" height="14" rx="2"/>
+            <rect class="box box-mha" x="138" y="44" width="42" height="14" rx="2"/>
+            <rect class="box box-mha" x="184" y="44" width="42" height="14" rx="2"/>
+            <rect class="box box-mha" x="230" y="44" width="42" height="14" rx="2"/>
+            <rect class="box box-mha" x="0" y="58" width="42" height="14" rx="2"/>
+            <rect class="box box-mha" x="46" y="58" width="42" height="14" rx="2"/>
+            <rect class="box box-mha" x="92" y="58" width="42" height="14" rx="2"/>
+            <rect class="box box-mha" x="138" y="58" width="42" height="14" rx="2"/>
+            <rect class="box box-mha" x="184" y="58" width="42" height="14" rx="2"/>
+            <rect class="box box-mha" x="230" y="58" width="42" height="14" rx="2"/>
+          </g>
+          <text x="80" y="86" class="lbl-tiny">8 KV pairs per token × 64-dim each</text>
+          <text x="80" y="100" class="lbl-tiny">cache = 8 × 64 × 2 × tokens × layers</text>
+        </g>
+
+        <!-- Right: MLA -->
+        <text x="380" y="30" class="lbl" style="font-size:13px; font-weight:600;">MLA: one compressed latent per token</text>
+        <g transform="translate(380,60)">
+          <text x="0" y="0" class="lbl-mute">token t=1</text>
+          <text x="0" y="14" class="lbl-mute">token t=2</text>
+          <text x="0" y="28" class="lbl-mute">token t=3</text>
+          <text x="0" y="42" class="lbl-mute">token t=4</text>
+          <text x="0" y="56" class="lbl-mute">token t=5</text>
+
+          <g transform="translate(80,0)">
+            <!-- 1 row of small latents -->
+            <rect class="box box-mla" x="0" y="-12" width="80" height="14" rx="2"/>
+            <rect class="box box-mla" x="0" y="2" width="80" height="14" rx="2"/>
+            <rect class="box box-mla" x="0" y="16" width="80" height="14" rx="2"/>
+            <rect class="box box-mla" x="0" y="30" width="80" height="14" rx="2"/>
+            <rect class="box box-mla" x="0" y="44" width="80" height="14" rx="2"/>
+            <rect class="box box-mla" x="0" y="58" width="80" height="14" rx="2"/>
+          </g>
+          <text x="80" y="86" class="lbl-tiny">one c_t ∈ ℝ^d_c per token (d_c ≪ n_h·d_h)</text>
+          <text x="80" y="100" class="lbl-tiny">per-head K, V are projected on the fly during attention</text>
+
+          <!-- reconstruct arrow to expanded box -->
+          <path class="arrow-accent" d="M165,30 C195,30 200,30 220,30" stroke-dasharray="4 3">
+            <animate attributeName="stroke-dashoffset" from="14" to="0" dur="1s" repeatCount="indefinite"/>
+          </path>
+          <polygon class="arrowhead" points="220,26 228,30 220,34" style="fill:var(--accent);"/>
+
+          <g transform="translate(232,15)">
+            <rect class="box box-mla" x="0" y="0" width="40" height="6" rx="1"/>
+            <rect class="box box-mla" x="0" y="8" width="40" height="6" rx="1"/>
+            <rect class="box box-mla" x="0" y="16" width="40" height="6" rx="1"/>
+            <rect class="box box-mla" x="0" y="24" width="40" height="6" rx="1"/>
+          </g>
+          <text x="232" y="58" class="lbl-tiny">reconstructed K, V (used, not stored)</text>
+        </g>
+
+        <!-- legend -->
+        <g transform="translate(20,310)">
+          <rect class="box box-mha" x="0" y="0" width="14" height="10" rx="2"/>
+          <text x="22" y="9" class="lbl-tiny">stored in cache</text>
+          <rect class="box box-mla" x="120" y="0" width="14" height="10" rx="2"/>
+          <text x="142" y="9" class="lbl-tiny">compressed latent (stored)</text>
+          <circle class="dot pulse" cx="290" cy="5" r="4"/>
+          <text x="300" y="9" class="lbl-tiny">animation = reconstruction on the fly</text>
+        </g>
+      </svg>
+      <p class="diagram-caption">Figure 1 — Cache footprint per token. MHA: O(n<sub>h</sub>·d<sub>h</sub>) per layer. MLA: O(d<sub>c</sub>) per layer, with the per-head K and V rebuilt at attention time from the latent.</p>
+    </div>
+  </div>
+</section>
+
+<section id="walkthrough">
+  <div class="container">
+    <span class="label">Walkthrough</span>
+    <h2>Six pieces, each one idea.</h2>
+
+    <!-- 1. The KV cache tax -->
+    <h3>1. Why the KV cache is the bottleneck.</h3>
+    <p>During autoregressive decode, the model reuses the <code>K</code> and <code>V</code> tensors of every past token to compute attention for the new one. Caching them avoids a quadratic recompute, but the cache itself grows linearly with sequence length. For a 70B model at 128K context in fp16, the cache alone needs roughly <code>2 × 80 layers × 128K tokens × 128 heads × 128 dim × 2 bytes</code> ≈ 80 GiB per request — and that number is independent of how short or long the response actually is.</p>
+    <p>The cost shows up in three places. <strong>HBM capacity</strong> caps how many requests you can batch. <strong>Memory bandwidth</strong> bottlenecks attention compute because every token reads every past K and V. And for long-running agent sessions, <strong>SSD and host RAM</strong> fill up with persistent prefix caches. KV cache is the reason a 1M-context model is hard, not the parameters.</p>
+
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 720 80" role="img" aria-label="Cache footprint scales linearly with sequence length, four orders of magnitude">
+        <style>
+          .lbl { font-family: var(--font-mono); font-size: 10px; fill: var(--text-mute); }
+          .lbl-strong { font-family: var(--font-mono); font-size: 11px; fill: var(--text); font-weight: 600; }
+          .axis { stroke: var(--text-dim); stroke-width: 1; }
+          .growth { fill: var(--accent); opacity: 0.7; }
+        </style>
+        <text x="10" y="18" class="lbl-strong">Per-token cache cost is constant; total is linear in context.</text>
+        <g transform="translate(10,30)">
+          <line class="axis" x1="0" y1="36" x2="700" y2="36"/>
+          <polygon class="growth" points="0,36 20,32 50,28 100,22 180,16 280,10 400,5 540,2 700,0">
+            <animate attributeName="points" values="0,36 20,32 50,28 100,22 180,16 280,10 400,5 540,2 700,0; 0,36 20,33 50,29 100,23 180,17 280,11 400,6 540,3 700,1; 0,36 20,32 50,28 100,22 180,16 280,10 400,5 540,2 700,0" dur="3.6s" repeatCount="indefinite"/>
+          </polygon>
+          <text x="10" y="56" class="lbl">1K</text>
+          <text x="170" y="56" class="lbl">10K</text>
+          <text x="340" y="56" class="lbl">100K</text>
+          <text x="540" y="56" class="lbl">1M tokens</text>
+          <text x="700" y="56" class="lbl" text-anchor="end">context →</text>
+        </g>
+      </svg>
+    </div>
+
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 720 220" role="img" aria-label="KV cache grows with sequence length and head count">
+        <style>
+          .axis { stroke: var(--text-dim); stroke-width: 1; }
+          .lbl { font-family: var(--font-mono); font-size: 10px; fill: var(--text-mute); }
+          .bar { fill: var(--bg-soft); stroke: var(--border-strong); }
+          .bar-accent { fill: var(--accent); stroke: var(--accent-hover); }
+          .lbl-strong { font-family: var(--font-mono); font-size: 11px; fill: var(--text); font-weight: 600; }
+          .num { font-family: var(--font-mono); font-size: 11px; fill: var(--text); }
+        </style>
+        <text x="20" y="22" class="lbl-strong">KV cache per request — 70B model, fp16, 80 layers, 64 heads</text>
+        <g transform="translate(40,50)">
+          <!-- axes -->
+          <line class="axis" x1="0" y1="140" x2="660" y2="140"/>
+          <line class="axis" x1="0" y1="0" x2="0" y2="140"/>
+          <!-- x labels -->
+          <text x="20" y="160" class="lbl">8K</text>
+          <text x="120" y="160" class="lbl">32K</text>
+          <text x="240" y="160" class="lbl">128K</text>
+          <text x="400" y="160" class="lbl">512K</text>
+          <text x="560" y="160" class="lbl">1M</text>
+          <text x="320" y="180" class="lbl">sequence length (tokens)</text>
+
+          <!-- bars: scaled so 1M ~= 130 of 140 px. 80 GiB at 1M, 5 at 8K -->
+          <!-- MHA: ~5, 20, 80, 320, 620 GiB -->
+          <g>
+            <rect class="bar" x="10" y="139" width="30" height="1"/>
+            <rect class="bar" x="110" y="136" width="30" height="4"/>
+            <rect class="bar" x="230" y="124" width="30" height="16"/>
+            <rect class="bar" x="390" y="60" width="30" height="80"/>
+            <rect class="bar" x="550" y="0" width="30" height="140">
+              <animate attributeName="opacity" values="0.7;1;0.7" dur="2.6s" repeatCount="indefinite"/>
+            </rect>
+          </g>
+          <text x="10" y="138" class="num">5</text>
+          <text x="110" y="132" class="num">20</text>
+          <text x="230" y="120" class="num">80</text>
+          <text x="390" y="56" class="num">320</text>
+          <text x="555" y="-6" class="num">620</text>
+          <text x="640" y="80" class="lbl">GiB / req</text>
+        </g>
+      </svg>
+      <p class="diagram-caption">Figure 2 — Cache size per request scales linearly with sequence length. The ceiling stops being parameters and starts being HBM.</p>
+    </div>
+
+    <div class="why-aside">
+      <strong>why this matters</strong>
+      Any architectural trick that makes <code>K</code> and <code>V</code> smaller per token compounds across layers, across batched requests, and across long contexts. A 10x cache reduction means 10x more requests fit in HBM, and that is what turns a research demo into a deployment.
+    </div>
+
+    <!-- 2. MQA, GQA, and why they plateau -->
+    <h3>2. The earlier tricks (MQA, GQA) and why they plateau.</h3>
+    <p>Two prior moves push the same lever. <strong>Multi-Query Attention (MQA)</strong> has every head share a single <code>K</code> and <code>V</code>. That cuts the cache by a factor of <code>n<sub>h</sub></code>, but quality drops noticeably because the heads can no longer attend to different things. <strong>Grouped-Query Attention (GQA)</strong> compromises: group the heads, share <code>K</code>/<code>V</code> within a group. Llama-3 uses 8 KV heads behind 32 query heads — a 4x cut, acceptable quality. GQA is now the default in most modern decoders.</p>
+    <p>But GQA only addresses the head axis. The per-head dimension <code>d<sub>h</sub></code> stays untouched, and there is a quality ceiling: enough groups to be expressive, few enough to actually save memory. That is where MLA enters: it does not reduce the number of <code>K</code>/<code>V</code> heads, it reduces what is stored per head.</p>
+
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 720 200" role="img" aria-label="MQA, GQA, and MLA compared by KV cache size per token">
+        <style>
+          .lbl { font-family: var(--font-mono); font-size: 11px; fill: var(--text); }
+          .lbl-tiny { font-family: var(--font-mono); font-size: 10px; fill: var(--text-mute); }
+          .cell { stroke: var(--border-strong); }
+          .cell-accent { stroke: var(--accent-line); fill: var(--accent-soft); }
+          .cell-mute { fill: var(--bg-soft); }
+        </style>
+        <text x="20" y="24" class="lbl" style="font-weight:600;">KV cache per token, per layer (relative units)</text>
+        <g transform="translate(20,50)">
+          <!-- MHA: 8 KV heads -->
+          <text x="0" y="0" class="lbl">MHA</text>
+          <g transform="translate(60,-12)">
+            <rect class="cell cell-mute" x="0" y="0" width="22" height="22"/>
+            <rect class="cell cell-mute" x="24" y="0" width="22" height="22"/>
+            <rect class="cell cell-mute" x="48" y="0" width="22" height="22"/>
+            <rect class="cell cell-mute" x="72" y="0" width="22" height="22"/>
+            <rect class="cell cell-mute" x="96" y="0" width="22" height="22"/>
+            <rect class="cell cell-mute" x="120" y="0" width="22" height="22"/>
+            <rect class="cell cell-mute" x="144" y="0" width="22" height="22"/>
+            <rect class="cell cell-mute" x="168" y="0" width="22" height="22"/>
+          </g>
+          <text x="60" y="32" class="lbl-tiny">n_h KV heads × d_h</text>
+          <text x="240" y="6" class="lbl" style="fill:var(--danger);">= 1.0</text>
+
+          <!-- MQA: 1 KV -->
+          <text x="0" y="60" class="lbl">MQA</text>
+          <g transform="translate(60,48)">
+            <rect class="cell cell-mute" x="0" y="0" width="22" height="22"/>
+          </g>
+          <text x="60" y="92" class="lbl-tiny">1 KV head × d_h</text>
+          <text x="240" y="66" class="lbl" style="fill:var(--danger);">= 0.125</text>
+
+          <!-- GQA: 2 KV -->
+          <text x="0" y="120" class="lbl">GQA</text>
+          <g transform="translate(60,108)">
+            <rect class="cell cell-mute" x="0" y="0" width="22" height="22"/>
+            <rect class="cell cell-mute" x="24" y="0" width="22" height="22"/>
+          </g>
+          <text x="60" y="152" class="lbl-tiny">g KV heads × d_h</text>
+          <text x="240" y="126" class="lbl" style="fill:var(--danger);">≈ 0.25 (Llama-3 8 groups)</text>
+
+          <!-- MLA: latent -->
+          <text x="320" y="60" class="lbl" style="font-weight:600;">MLA</text>
+          <g transform="translate(380,48)">
+            <rect class="cell cell-accent" x="0" y="0" width="80" height="22">
+              <animate attributeName="opacity" values="0.85;1;0.85" dur="2.4s" repeatCount="indefinite"/>
+            </rect>
+          </g>
+          <text x="380" y="92" class="lbl-tiny">1 vector c_t ∈ ℝ^d_c, d_c ≪ n_h·d_h</text>
+          <text x="380" y="106" class="lbl-tiny">plus a tiny decoupled-RoPE key k^R</text>
+          <text x="560" y="66" class="lbl" style="fill:var(--accent-hover); font-weight:600;">≈ 0.04 to 0.10</text>
+        </g>
+      </svg>
+      <p class="diagram-caption">Figure 3 — MLA is not "fewer heads." It is "the same number of effective heads, but the heads are computed from a single compressed vector at attention time."</p>
+    </div>
+
+    <div class="why-aside">
+      <strong>why this matters</strong>
+      MQA and GQA are lossy: sharing K and V across heads forces every head to look at the same evidence. MLA compresses, not shares. The full per-head <code>K</code> and <code>V</code> are still computable, just not stored. Quality ends up closer to MHA than to GQA, with cache size closer to MQA.
+    </div>
+
+    <!-- 3. The MLA math -->
+    <h3>3. The compression math.</h3>
+    <p>The mechanism is one linear projection. Given input <code>h<sub>t</sub></code> for token <code>t</code>, MLA computes a single low-rank latent:</p>
+    <p style="font-family:var(--font-mono); font-size:14px; background:var(--bg-soft); padding:14px 18px; border-radius:8px; border:1px solid var(--border);">
+      c<sub>t</sub> = W<sup>DKV</sup> h<sub>t</sub> ∈ ℝ<sup>d<sub>c</sub></sup>
+    </p>
+    <p>The full per-head keys and values are then reconstructed on the fly:</p>
+    <p style="font-family:var(--font-mono); font-size:14px; background:var(--bg-soft); padding:14px 18px; border-radius:8px; border:1px solid var(--border);">
+      k<sup>C</sup><sub>t</sub> = W<sup>UK</sup> c<sub>t</sub> &nbsp;&nbsp; v<sub>t</sub> = W<sup>UV</sup> c<sub>t</sub>
+    </p>
+    <p>What gets cached during decode is the single vector <code>c<sub>t</sub></code> per token, not the <code>n<sub>h</sub> × d<sub>h</sub></code> per-head <code>K</code> and <code>V</code>. With <code>d<sub>c</sub></code> chosen around <code>d<sub>h</sub></code> or a few times <code>d<sub>h</sub></code>, the cache footprint drops by a factor of roughly <code>(2 · n<sub>h</sub> · d<sub>h</sub>) / d<sub>c</sub></code> — and the per-head tensors are still produced at every step, just not stored.</p>
+
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 720 240" role="img" aria-label="MLA forward pass: input, down-projection, cache, up-projection to per-head K and V">
+        <style>
+          .lbl { font-family: var(--font-mono); font-size: 11px; fill: var(--text); }
+          .lbl-mute { font-family: var(--font-mono); font-size: 10px; fill: var(--text-mute); }
+          .op { fill: var(--bg-elev); stroke: var(--border-strong); }
+          .op-cache { fill: var(--accent-soft); stroke: var(--accent-line); stroke-width: 1.5; }
+          .op-active { fill: var(--accent); stroke: var(--accent-hover); }
+          .arrow { stroke: var(--text-dim); stroke-width: 1.3; fill: none; }
+          .arrow-accent { stroke: var(--accent); stroke-width: 1.5; fill: none; }
+          .arrowhead { fill: var(--text-dim); }
+          .arrowhead-a { fill: var(--accent); }
+        </style>
+
+        <!-- input -->
+        <g transform="translate(20,90)">
+          <rect class="op" x="0" y="0" width="50" height="60" rx="6"/>
+          <text x="25" y="34" class="lbl" text-anchor="middle">h_t</text>
+        </g>
+        <text x="20" y="84" class="lbl-mute">input</text>
+        <text x="20" y="170" class="lbl-mute">d_model</text>
+
+        <!-- W_DKV down -->
+        <g transform="translate(110,80)">
+          <rect class="op" x="0" y="0" width="60" height="80" rx="6"/>
+          <text x="30" y="36" class="lbl" text-anchor="middle">W^DKV</text>
+          <text x="30" y="54" class="lbl-mute" text-anchor="middle">down</text>
+        </g>
+        <path class="arrow" d="M75,120 L108,120"/>
+        <polygon class="arrowhead" points="108,116 116,120 108,124"/>
+
+        <!-- latent cache -->
+        <g transform="translate(210,70)">
+          <rect class="op op-cache" x="0" y="0" width="80" height="100" rx="8"/>
+          <text x="40" y="32" class="lbl" text-anchor="middle" style="font-weight:600;">c_t</text>
+          <text x="40" y="48" class="lbl-mute" text-anchor="middle">stored</text>
+          <text x="40" y="62" class="lbl-mute" text-anchor="middle">in cache</text>
+          <text x="40" y="84" class="lbl-mute" text-anchor="middle">d_c dim</text>
+          <animateTransform attributeName="transform" type="translate" values="210,70; 210,68; 210,70" dur="2.4s" repeatCount="indefinite"/>
+        </g>
+        <path class="arrow-accent" d="M173,120 L208,120" stroke-dasharray="4 3">
+          <animate attributeName="stroke-dashoffset" from="14" to="0" dur="1s" repeatCount="indefinite"/>
+        </path>
+        <polygon class="arrowhead-a" points="208,116 216,120 208,124"/>
+
+        <!-- branch up to W_UK -->
+        <g transform="translate(330,40)">
+          <rect class="op" x="0" y="0" width="60" height="60" rx="6"/>
+          <text x="30" y="26" class="lbl" text-anchor="middle">W^UK</text>
+          <text x="30" y="42" class="lbl-mute" text-anchor="middle">up</text>
+        </g>
+        <path class="arrow" d="M293,80 Q310,80 315,70 Q320,60 328,60" stroke-dasharray="0"/>
+        <polygon class="arrowhead" points="328,56 336,60 328,64"/>
+
+        <!-- branch up to W_UV -->
+        <g transform="translate(330,140)">
+          <rect class="op" x="0" y="0" width="60" height="60" rx="6"/>
+          <text x="30" y="26" class="lbl" text-anchor="middle">W^UV</text>
+          <text x="30" y="42" class="lbl-mute" text-anchor="middle">up</text>
+        </g>
+        <path class="arrow" d="M293,160 Q310,160 315,170 Q320,180 328,180"/>
+        <polygon class="arrowhead" points="328,176 336,180 328,184"/>
+
+        <!-- outputs: K heads, V heads -->
+        <g transform="translate(430,28)">
+          <rect class="op op-active" x="0" y="0" width="180" height="40" rx="6" opacity="0.6"/>
+          <text x="90" y="25" class="lbl" text-anchor="middle" style="font-weight:600;">k_t^C ∈ ℝ^(n_h · d_h)</text>
+        </g>
+        <path class="arrow" d="M393,70 L428,58"/>
+        <polygon class="arrowhead" points="428,54 436,58 428,62"/>
+
+        <g transform="translate(430,170)">
+          <rect class="op op-active" x="0" y="0" width="180" height="40" rx="6" opacity="0.6"/>
+          <text x="90" y="25" class="lbl" text-anchor="middle" style="font-weight:600;">v_t ∈ ℝ^(n_h · d_h)</text>
+        </g>
+        <path class="arrow" d="M393,170 L428,180"/>
+        <polygon class="arrowhead" points="428,176 436,180 428,184"/>
+
+        <text x="430" y="220" class="lbl-mute">reconstructed per step, never stored</text>
+
+        <!-- bottom label -->
+        <text x="20" y="225" class="lbl-mute">green path is what gets cached</text>
+      </svg>
+      <p class="diagram-caption">Figure 4 — One down-projection into the cache. Two up-projections compute per-head K and V at attention time.</p>
+    </div>
+
+    <div class="why-aside">
+      <strong>why this matters</strong>
+      The reconstruction adds two matmuls per layer per step. For a 70B model on an H100, those matmuls are free next to the attention GEMM that follows. The cache size win is what dominates serving cost.
+    </div>
+
+    <!-- 4. Decoupled RoPE -->
+    <h3>4. Decoupled RoPE: how MLA keeps position information.</h3>
+    <p>Rotary Position Embeddings (RoPE) get applied to <code>K</code> inside the attention dot product, so <code>K</code> must carry positional info. If you cache a compressed latent and only reconstruct <code>K</code> later, you have two choices. Either RoPE the reconstructed <code>K</code> (cheap but breaks absorbed-weight optimizations), or carry an additional small per-head key <code>k<sup>R</sup><sub>t</sub></code> alongside the latent and RoPE only that. MLA picks the second.</p>
+    <p>In practice, the cache for each token stores: one <code>c<sub>t</sub></code> of size <code>d<sub>c</sub></code> ≈ 4·d<sub>h</sub> ≈ 512 for a 70B model, and one tiny <code>k<sup>R</sup><sub>t</sub></code> of size <code>d<sup>R</sup><sub>h</sub></code> ≈ 64. The attention kernel computes RoPE on the fly for both the reconstructed query <code>q<sup>C</sup><sub>t</sub></code> and the cached <code>k<sup>R</sup><sub>t</sub></code>, and merges them into the final per-head key. The cost of preserving position information is one extra ~64-dim vector per token, which is essentially free.</p>
+
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 720 220" role="img" aria-label="Decoupled RoPE: separate RoPE key and compressed key/values are merged at attention time">
+        <style>
+          .lbl { font-family: var(--font-mono); font-size: 11px; fill: var(--text); }
+          .lbl-mute { font-family: var(--font-mono); font-size: 10px; fill: var(--text-mute); }
+          .op { fill: var(--bg-elev); stroke: var(--border-strong); }
+          .op-soft { fill: var(--bg-soft); stroke: var(--border); }
+          .op-accent { fill: var(--accent-soft); stroke: var(--accent-line); stroke-width: 1.5; }
+          .arrow { stroke: var(--text-dim); stroke-width: 1.3; fill: none; }
+          .arrow-accent { stroke: var(--accent); stroke-width: 1.5; fill: none; }
+          .arrowhead { fill: var(--text-dim); }
+        </style>
+
+        <!-- cached per token -->
+        <g transform="translate(30,60)">
+          <rect class="op op-accent" x="0" y="0" width="120" height="34" rx="6"/>
+          <text x="60" y="14" class="lbl" text-anchor="middle" style="font-weight:600;">c_t (d_c)</text>
+          <text x="60" y="28" class="lbl-mute" text-anchor="middle">compressed latent</text>
+
+          <rect class="op op-accent" x="0" y="50" width="120" height="34" rx="6"/>
+          <text x="60" y="64" class="lbl" text-anchor="middle" style="font-weight:600;">k_t^R (d^R_h)</text>
+          <text x="60" y="78" class="lbl-mute" text-anchor="middle">decoupled RoPE key</text>
+
+          <text x="60" y="100" class="lbl-mute" text-anchor="middle">— both cached —</text>
+        </g>
+
+        <!-- attention block -->
+        <g transform="translate(220,30)">
+          <rect class="op-soft" x="0" y="0" width="200" height="170" rx="10"/>
+          <text x="100" y="20" class="lbl" text-anchor="middle" style="font-weight:600;">Attention</text>
+
+          <!-- up-projection to K^C, V -->
+          <rect class="op" x="20" y="40" width="160" height="26" rx="4"/>
+          <text x="100" y="57" class="lbl" text-anchor="middle">W^UK, W^UV reconstruct k^C, v</text>
+
+          <!-- RoPE on q and k^R -->
+          <rect class="op" x="20" y="80" width="160" height="26" rx="4"/>
+          <text x="100" y="97" class="lbl" text-anchor="middle">RoPE on q^C and k^R</text>
+
+          <!-- concat -->
+          <rect class="op" x="20" y="120" width="160" height="26" rx="4"/>
+          <text x="100" y="137" class="lbl" text-anchor="middle">concat k = [k^C · RoPE(q); RoPE(k^R)]</text>
+        </g>
+
+        <!-- inputs into the block -->
+        <path class="arrow" d="M153,77 L218,50"/>
+        <polygon class="arrowhead" points="218,46 226,50 218,54"/>
+        <path class="arrow-accent" d="M153,127 L218,95" stroke-dasharray="3 3">
+          <animate attributeName="stroke-dashoffset" from="12" to="0" dur="0.9s" repeatCount="indefinite"/>
+        </path>
+        <polygon class="arrowhead-a" points="218,91 226,95 218,99"/>
+
+        <!-- output to attention -->
+        <path class="arrow" d="M423,105 L470,105"/>
+        <polygon class="arrowhead" points="470,101 478,105 470,109"/>
+
+        <g transform="translate(484,90)">
+          <rect class="op op-accent" x="0" y="0" width="200" height="34" rx="6"/>
+          <text x="100" y="14" class="lbl" text-anchor="middle" style="font-weight:600;">softmax(q · kᵀ / √d) v</text>
+          <text x="100" y="28" class="lbl-mute" text-anchor="middle">standard attention</text>
+        </g>
+
+        <!-- bottom note -->
+        <text x="220" y="216" class="lbl-mute">total cache per token = d_c + d^R_h ≈ 4·d_h + 64</text>
+      </svg>
+      <p class="diagram-caption">Figure 5 — The decoupled RoPE design lets MLA keep positional attention without giving up the compression win.</p>
+    </div>
+
+    <div class="why-aside">
+      <strong>why this matters</strong>
+      Early attempts at compressing K and V broke because they broke RoPE. Decoupled RoPE was the unlock. Every modern MLA-style design (TransMLA, MiniMax MLA variants) follows this exact pattern: compress content, keep a tiny dedicated position channel.
+    </div>
+
+    <!-- 5. The 437x story -->
+    <h3>5. From V2 (93% cut) to V4.1-Flash (437x cut).</h3>
+    <p>MLA has compounded with four other tricks across DeepSeek's generations. Each one attacks a different axis of the cache footprint, and they multiply.</p>
+
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 720 260" role="img" aria-label="KV cache reduction across DeepSeek generations">
+        <style>
+          .lbl { font-family: var(--font-mono); font-size: 10px; fill: var(--text-mute); }
+          .lbl-strong { font-family: var(--font-mono); font-size: 11px; fill: var(--text); font-weight: 600; }
+          .num-big { font-family: var(--font-mono); font-size: 16px; fill: var(--accent-hover); font-weight: 700; }
+          .bar { fill: var(--accent); stroke: var(--accent-hover); }
+          .axis { stroke: var(--text-dim); stroke-width: 1; }
+          .tag { font-family: var(--font-mono); font-size: 10px; fill: var(--text); }
+        </style>
+
+        <text x="20" y="22" class="lbl-strong">KV cache footprint per token, DeepSeek lineage</text>
+
+        <g transform="translate(20,50)">
+          <line class="axis" x1="100" y1="0" x2="100" y2="200"/>
+          <line class="axis" x1="100" y1="200" x2="680" y2="200"/>
+
+          <!-- V1 baseline (GQA, fp16) — reference 1.0 -->
+          <text x="0" y="100" class="lbl">V1</text>
+          <text x="0" y="115" class="lbl">baseline</text>
+          <rect class="bar" x="105" y="20" width="540" height="20" opacity="0.25"/>
+          <text x="220" y="35" class="lbl">GQA + bf16  ·  reference = 1.0x</text>
+
+          <!-- V2: MLA -->
+          <text x="0" y="135" class="lbl">V2</text>
+          <text x="0" y="150" class="lbl">+ MLA</text>
+          <rect class="bar" x="105" y="60" width="36" height="20">
+            <animate attributeName="width" values="36;38;36" dur="3s" repeatCount="indefinite"/>
+          </rect>
+          <text x="148" y="75" class="lbl">93.3% reduction → 0.067x</text>
+
+          <!-- V3: MLA + FP8 KV cache -->
+          <text x="0" y="170" class="lbl">V3</text>
+          <text x="0" y="185" class="lbl">+ fp8</text>
+          <rect class="bar" x="105" y="100" width="18" height="20"/>
+          <text x="130" y="115" class="lbl">fp8 KV cache halves bytes again</text>
+
+          <!-- V4: + c4a/c128a sparse + fp4 indexer -->
+          <text x="0" y="205" class="lbl">V4</text>
+          <text x="0" y="220" class="lbl">+ CSA</text>
+          <rect class="bar" x="105" y="140" width="2.5" height="20"/>
+          <text x="115" y="155" class="lbl">c4a/c128a compression across 4 or 128 tokens</text>
+        </g>
+
+        <!-- callout on right -->
+        <g transform="translate(480,30)">
+          <rect class="bar" x="0" y="0" width="200" height="220" rx="10" opacity="0.08"/>
+          <text x="100" y="32" class="lbl-strong" text-anchor="middle">DeepSeek-V4.1-Flash</text>
+          <text x="100" y="56" class="num-big" text-anchor="middle">890 bytes</text>
+          <text x="100" y="76" class="lbl" text-anchor="middle">per token</text>
+
+          <text x="100" y="108" class="lbl" text-anchor="middle">1/4 of V4-Flash</text>
+          <text x="100" y="126" class="lbl" text-anchor="middle">1/8 persistent</text>
+          <text x="100" y="144" class="lbl" text-anchor="middle">vs DeepSeek V1 baseline</text>
+
+          <text x="100" y="174" class="num-big" text-anchor="middle">437x</text>
+          <text x="100" y="194" class="lbl" text-anchor="middle">total reduction</text>
+          <text x="100" y="210" class="lbl" text-anchor="middle">across 4 generations</text>
+        </g>
+      </svg>
+      <p class="diagram-caption">Figure 6 — MLA bought 15x. fp8, CSA, and CED architecture bought the rest. The 437x is multiplicative, not magical.</p>
+    </div>
+
+    <p>The compounding matters. <strong>MLA</strong> cuts the per-token content by ~15x. <strong>fp8 KV cache</strong> halves the byte width. <strong>Compressed Sparse Attention (CSA)</strong> in V4 groups every 8 or 128 tokens into one compressed slot, with an indexer that picks which slot each query attends to. And <strong>FP4 KV</strong> in V4.1-Flash halves the byte width again via E2M1 with per-16-channel scaling. Stack four 5-10x factors and you get hundreds.</p>
+
+    <div class="why-aside">
+      <strong>why this matters</strong>
+      This is why "DeepSeek shipped a 1M-context MoE for cheap" is not an accident. It is the same compression trick applied four times along different axes. The lesson: pick the cheapest axis to compress next, and never let quantization eat accuracy on its own without architectural backup.
+    </div>
+
+    <!-- 6. Adoption -->
+    <h3>6. Where MLA is used today.</h3>
+    <p>MLA is not exotic anymore. <strong>DeepSeek-V2</strong>, <strong>V3</strong>, <strong>V3.1</strong>, <strong>V3.2</strong>, <strong>V4</strong>, and <strong>V4.1-Flash</strong> all use it. <strong>MiniMax-M3</strong> uses an MLA-style compressed latent with decoupled RoPE. <strong>TransMLA</strong> is a published conversion procedure that takes a pre-trained GQA model and turns it into MLA without retraining from scratch. <strong>FlashMLA</strong> is the open-source CUDA kernel from DeepSeek that fuses RoPE, attention, RoPE, and cast into a single pass for MLA-shaped inputs — and it is the kernel shipping in vLLM's production builds for MLA models.</p>
+
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 720 200" role="img" aria-label="Timeline of MLA from 2024 paper to 2026 production deployments">
+        <style>
+          .lbl { font-family: var(--font-mono); font-size: 10px; fill: var(--text-mute); }
+          .lbl-strong { font-family: var(--font-mono); font-size: 11px; fill: var(--text); font-weight: 600; }
+          .axis { stroke: var(--text-dim); stroke-width: 1; }
+          .dot { fill: var(--accent); }
+          .conn { stroke: var(--accent-line); stroke-width: 1.5; fill: none; }
+          .pill { fill: var(--bg-elev); stroke: var(--border-strong); }
+        </style>
+
+        <text x="20" y="22" class="lbl-strong">MLA in the wild</text>
+
+        <!-- timeline axis -->
+        <line class="axis" x1="60" y1="120" x2="700" y2="120"/>
+
+        <!-- 2024 Q2 — paper -->
+        <g transform="translate(60,120)">
+          <circle class="dot" cx="0" cy="0" r="6">
+            <animate attributeName="r" values="6;8;6" dur="2.6s" repeatCount="indefinite"/>
+          </circle>
+          <rect class="pill" x="-32" y="-50" width="100" height="32" rx="6"/>
+          <text x="18" y="-32" class="lbl-strong" text-anchor="middle">DeepSeek-V2 paper</text>
+          <text x="18" y="-20" class="lbl" text-anchor="middle">May 2024 · arXiv 2405.04434</text>
+        </g>
+
+        <!-- 2024 Q4 — FlashMLA kernel -->
+        <g transform="translate(220,120)">
+          <circle class="dot" cx="0" cy="0" r="6"/>
+          <rect class="pill" x="-44" y="-50" width="120" height="32" rx="6"/>
+          <text x="16" y="-32" class="lbl-strong" text-anchor="middle">FlashMLA kernel</text>
+          <text x="16" y="-20" class="lbl" text-anchor="middle">late 2024 · CUDA fused</text>
+        </g>
+
+        <!-- 2025 — TransMLA -->
+        <g transform="translate(360,120)">
+          <circle class="dot" cx="0" cy="0" r="6"/>
+          <rect class="pill" x="-44" y="18" width="120" height="32" rx="6"/>
+          <text x="16" y="36" class="lbl-strong" text-anchor="middle">TransMLA conversion</text>
+          <text x="16" y="48" class="lbl" text-anchor="middle">2025 · GQA → MLA, no retrain</text>
+        </g>
+
+        <!-- 2026 — vLLM support -->
+        <g transform="translate(500,120)">
+          <circle class="dot" cx="0" cy="0" r="6"/>
+          <rect class="pill" x="-44" y="-50" width="120" height="32" rx="6"/>
+          <text x="16" y="-32" class="lbl-strong" text-anchor="middle">vLLM production</text>
+          <text x="16" y="-20" class="lbl" text-anchor="middle">2026 · DeepSeek V4 + V4.1</text>
+        </g>
+
+        <!-- 2026 — V4.1-Flash -->
+        <g transform="translate(640,120)">
+          <circle class="dot" cx="0" cy="0" r="6">
+            <animate attributeName="r" values="6;9;6" dur="2s" repeatCount="indefinite"/>
+          </circle>
+          <rect class="pill" x="-44" y="18" width="120" height="32" rx="6"/>
+          <text x="16" y="36" class="lbl-strong" text-anchor="middle">V4.1-Flash release</text>
+          <text x="16" y="48" class="lbl" text-anchor="middle">Sep 2026 · 890 B/token</text>
+        </g>
+
+        <path class="conn" d="M60,120 L640,120" stroke-dasharray="2 4">
+          <animate attributeName="stroke-dashoffset" from="0" to="-12" dur="2s" repeatCount="indefinite"/>
+        </path>
+      </svg>
+      <p class="diagram-caption">Figure 7 — From research paper to production kernel in roughly two years. MLA is now table stakes for long-context serving.</p>
+    </div>
+
+    <div class="why-aside">
+      <strong>why this matters</strong>
+      If you are designing or evaluating an attention mechanism, MLA is the benchmark. Anything you build should at minimum match its cache-to-quality ratio, or beat it on one axis (latency, training cost, ease of quantization) while matching on the others. The bar has moved.
+    </div>
+  </div>
+</section>
+
+<section id="confusions">
+  <div class="container">
+    <span class="label">Common confusions</span>
+    <h2>Four things people get wrong.</h2>
+
+    <div class="confusions">
+
+      <div class="confusion-card">
+        <div class="confusion-num">01</div>
+        <p class="confusion-q">"MLA is just MQA with more groups."</p>
+        <p class="confusion-a">Wrong. MQA shares the same <code>K</code> and <code>V</code> across all heads, which is a memory win but a quality loss. MLA compresses the KV representation into a low-rank latent and reconstructs the full per-head tensors at attention time. The cache holds one vector, not one shared head.</p>
+      </div>
+
+      <div class="confusion-card">
+        <div class="confusion-num">02</div>
+        <p class="confusion-q">"MLA breaks RoPE, so you cannot use it."</p>
+        <p class="confusion-a">The naive version does. The actual MLA design uses a small decoupled RoPE key <code>k<sup>R</sup></code> kept alongside the latent, so position information is preserved without storing full positional keys. The kernels (FlashMLA) fuse the RoPE into the attention GEMM with one extra small vector.</p>
+      </div>
+
+      <div class="confusion-card">
+        <div class="confusion-num">03</div>
+        <p class="confusion-q">"The 437x cache cut is just MLA."</p>
+        <p class="confusion-a">No — MLA gave ~93% of the way there. The DeepSeek lineage added fp8 quantization (2x), Compressed Sparse Attention across tokens (4 to 128x), FP4 KV in V4.1 (another 2x), and CED architecture for persistent caching (another 2x). The 437x is multiplicative across four orthogonal axes.</p>
+      </div>
+
+      <div class="confusion-card">
+        <div class="confusion-num">04</div>
+        <p class="confusion-q">"MLA is slower per step because of the reconstruction."</p>
+        <p class="confusion-a">In theory yes — you pay two extra matmuls. In practice no — the attention GEMM becomes much cheaper because the per-head K and V are smaller to read from memory, and bandwidth dominates over arithmetic. FlashMLA shows throughput roughly matching or beating standard MHA at the same parameter count.</p>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<section id="next">
+  <div class="container">
+    <span class="label">Where to go next</span>
+    <h2>Three specific followups.</h2>
+
+    <div class="next-grid">
+      <a class="next-card" href="https://arxiv.org/abs/2405.04434" target="_blank" rel="noopener">
+        <span class="next-tag">Paper</span>
+        <p class="next-title">DeepSeek-V2: the original MLA paper</p>
+        <p class="next-meta">DeepSeek-AI · arXiv 2405.04434 · May 2024 · the math in full</p>
+      </a>
+      <a class="next-card" href="https://vllm.ai/blog/2026-04-24-deepseek-v4" target="_blank" rel="noopener">
+        <span class="next-tag">Blog</span>
+        <p class="next-title">vLLM's DeepSeek V4 deep-dive</p>
+        <p class="next-meta">vLLM team · Apr 2026 · first-principles explanation of V4 attention and the c4a / c128a math</p>
+      </a>
+      <a class="next-card" href="https://github.com/deepseek-ai/FlashMLA" target="_blank" rel="noopener">
+        <span class="next-tag">Code</span>
+        <p class="next-title">FlashMLA kernel on GitHub</p>
+        <p class="next-meta">DeepSeek-AI · open source · fused RoPE-attention-RoPE-cast CUDA kernel for MLA inputs</p>
+      </a>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="container">
+    Day 3 of the explainer series. Built by Hermes using the explainer-builder skill.
+  </div>
+</footer>
+
+<script>
+(function(){
+  var btn = document.getElementById('themeBtn');
+  if(!btn) return;
+  var set = function(t){
+    document.documentElement.setAttribute('data-theme', t);
+    try { localStorage.setItem('theme', t); } catch(e){}
+    btn.textContent = t === 'dark' ? 'light' : 'dark';
+  };
+  var current = document.documentElement.getAttribute('data-theme') || 'light';
+  btn.textContent = current === 'dark' ? 'light' : 'dark';
+  btn.addEventListener('click', function(){
+    var cur = document.documentElement.getAttribute('data-theme') || 'light';
+    set(cur === 'dark' ? 'light' : 'dark');
+  });
+})();
+</script>
+
+</body>
+</html>
