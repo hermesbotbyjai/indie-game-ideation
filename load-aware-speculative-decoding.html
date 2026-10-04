@@ -1,0 +1,1008 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Load-Aware Speculative Decoding: Hermes Daily Explainer</title>
+<script>
+  // Pre-paint theme: read storage before stylesheet so first frame is correct.
+  (function () {
+    try {
+      var saved = localStorage.getItem('hermes-theme');
+      var prefers = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+      var t = saved || (prefers ? 'dark' : 'light');
+      document.documentElement.setAttribute('data-theme', t);
+    } catch (e) {}
+  })();
+</script>
+<style>
+  :root {
+    --bg: #ffffff;
+    --bg-soft: #fafafa;
+    --bg-elev: #f4f4f5;
+    --fg: #0d0d0d;
+    --fg-soft: #4a4a4a;
+    --fg-mute: #7a7a7a;
+    --border: rgba(13, 13, 13, 0.08);
+    --border-soft: rgba(13, 13, 13, 0.05);
+    --accent: #18E299;
+    --accent-soft: rgba(24, 226, 153, 0.10);
+    --accent-ring: rgba(24, 226, 153, 0.35);
+    --code-bg: #f4f4f5;
+    --shadow: 0 1px 2px rgba(13, 13, 13, 0.04), 0 4px 16px rgba(13, 13, 13, 0.05);
+    --grad-hero: radial-gradient(ellipse 80% 60% at 50% 0%, rgba(24, 226, 153, 0.10), transparent 60%);
+    --warn: #f59e0b;
+    --warn-soft: rgba(245, 158, 11, 0.10);
+    --cool: #3b82f6;
+    --cool-soft: rgba(59, 130, 246, 0.10);
+    --bad: #ef4444;
+    --bad-soft: rgba(239, 68, 68, 0.10);
+  }
+  html[data-theme="dark"] {
+    --bg: #0a0a0a;
+    --bg-soft: #0f0f10;
+    --bg-elev: #16161a;
+    --fg: #f5f5f5;
+    --fg-soft: #c2c2c8;
+    --fg-mute: #8a8a92;
+    --border: rgba(255, 255, 255, 0.10);
+    --border-soft: rgba(255, 255, 255, 0.05);
+    --accent: #2af5a8;
+    --accent-soft: rgba(42, 245, 168, 0.12);
+    --accent-ring: rgba(42, 245, 168, 0.40);
+    --code-bg: #16161a;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 4px 16px rgba(0, 0, 0, 0.5);
+    --grad-hero: radial-gradient(ellipse 80% 60% at 50% 0%, rgba(42, 245, 168, 0.14), transparent 60%);
+    --warn-soft: rgba(245, 158, 11, 0.14);
+    --cool-soft: rgba(59, 130, 246, 0.14);
+    --bad-soft: rgba(239, 68, 68, 0.14);
+  }
+  @media (prefers-color-scheme: dark) {
+    html:not([data-theme="light"]) {
+      --bg: #0a0a0a;
+      --bg-soft: #0f0f10;
+      --bg-elev: #16161a;
+      --fg: #f5f5f5;
+      --fg-soft: #c2c2c8;
+      --fg-mute: #8a8a92;
+      --border: rgba(255, 255, 255, 0.10);
+      --border-soft: rgba(255, 255, 255, 0.05);
+      --accent: #2af5a8;
+      --accent-soft: rgba(42, 245, 168, 0.12);
+      --accent-ring: rgba(42, 245, 168, 0.40);
+      --code-bg: #16161a;
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 4px 16px rgba(0, 0, 0, 0.5);
+      --grad-hero: radial-gradient(ellipse 80% 60% at 50% 0%, rgba(42, 245, 168, 0.14), transparent 60%);
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--fg); overflow-x: hidden; }
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: 17px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  .mono { font-family: 'Geist Mono', 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace; }
+  a { color: var(--fg); text-decoration: none; border-bottom: 1px solid var(--accent-ring); }
+  a:hover { color: var(--accent); border-bottom-color: var(--accent); }
+  code { font-family: 'Geist Mono', monospace; font-size: 0.92em; background: var(--code-bg); padding: 2px 6px; }
+  pre { font-family: 'Geist Mono', monospace; background: var(--code-bg); padding: 16px 18px; border-radius: 10px; border: 1px solid var(--border); overflow-x: auto; font-size: 14px; line-height: 1.55; }
+
+  /* Layout */
+  .nav {
+    position: sticky; top: 0; z-index: 50;
+    backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+    background: color-mix(in oklab, var(--bg) 85%, transparent);
+    border-bottom: 1px solid var(--border-soft);
+  }
+  .nav-inner { max-width: 1200px; margin: 0 auto; padding: 14px 24px; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+  .brand { font-weight: 600; letter-spacing: -0.01em; display: flex; align-items: center; gap: 10px; }
+  .brand-mark { width: 22px; height: 22px; border-radius: 6px; background: var(--accent); display: inline-block; }
+  .nav-links { display: flex; align-items: center; gap: 18px; font-size: 14px; color: var(--fg-soft); }
+  .nav-links a { border-bottom: none; }
+  @media (max-width: 540px) {
+    .nav-links a:not(:last-of-type) { display: none; }
+  }
+  .theme-toggle {
+    background: transparent; border: 1px solid var(--border); border-radius: 9999px;
+    width: 36px; height: 36px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+    color: var(--fg-soft);
+  }
+  .theme-toggle:hover { color: var(--accent); border-color: var(--accent-ring); }
+
+  .wrap { max-width: 1200px; margin: 0 auto; padding: 0 24px; }
+
+  /* Hero */
+  .hero { padding: 80px 0 56px; background: var(--grad-hero); border-bottom: 1px solid var(--border-soft); }
+  .label {
+    display: inline-block; font-family: 'Geist Mono', monospace; font-size: 11px; letter-spacing: 0.18em;
+    text-transform: uppercase; color: var(--fg-soft);
+    padding: 6px 12px; border: 1px solid var(--border); border-radius: 9999px;
+    background: var(--bg-soft);
+  }
+  .hero h1 {
+    font-size: clamp(40px, 6vw, 64px); line-height: 1.05; letter-spacing: -0.025em;
+    font-weight: 600; margin: 18px 0 14px; max-width: 18ch;
+  }
+  .hero .tag { font-size: 19px; color: var(--fg-soft); max-width: 60ch; line-height: 1.55; }
+  .youll-get {
+    margin-top: 28px; display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 12px; max-width: 760px;
+  }
+  .yg {
+    border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px;
+    background: var(--bg); font-size: 14px; color: var(--fg-soft); line-height: 1.5;
+    display: flex; gap: 10px; align-items: flex-start;
+  }
+  .yg .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); flex: 0 0 8px; margin-top: 7px; }
+
+  /* Sections */
+  section { padding: 64px 0; border-bottom: 1px solid var(--border-soft); }
+  section h2 { font-size: clamp(28px, 4vw, 40px); line-height: 1.1; letter-spacing: -0.02em; font-weight: 600; margin: 0 0 8px; }
+  .section-label { font-family: 'Geist Mono', monospace; font-size: 11px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--accent); margin-bottom: 14px; }
+  .lede { font-size: 18px; color: var(--fg-soft); max-width: 62ch; margin: 0 0 24px; }
+
+  /* One-sentence callout */
+  .callout {
+    border: 1px solid var(--accent-ring); border-radius: 16px;
+    padding: 28px 32px; background: var(--accent-soft);
+    font-size: 21px; line-height: 1.5; color: var(--fg);
+    max-width: 70ch; font-weight: 500;
+  }
+  .callout .pre { font-family: 'Geist Mono', monospace; font-size: 12px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--fg-soft); display: block; margin-bottom: 10px; }
+
+  /* Mental model diagram */
+  .mm-frame { margin-top: 28px; padding: 24px; border: 1px solid var(--border); border-radius: 18px; background: var(--bg-soft); position: relative; }
+  .mm-caption { font-size: 14px; color: var(--fg-soft); margin-top: 14px; max-width: 70ch; }
+
+  /* Walkthrough */
+  .walk { display: grid; gap: 56px; margin-top: 32px; }
+  .step { display: grid; grid-template-columns: 1fr; gap: 18px; }
+  .step p { margin: 0; max-width: 70ch; }
+  .step .why {
+    border: 1px solid var(--border); border-radius: 12px; padding: 14px 18px;
+    background: var(--bg-soft); font-size: 14px; color: var(--fg-soft); max-width: 70ch;
+  }
+  .step .why b { color: var(--fg); font-weight: 600; }
+  .step .why .why-label { font-family: 'Geist Mono', monospace; font-size: 10.5px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--accent); display: block; margin-bottom: 6px; }
+  .step .diagram-wrap {
+    border: 1px solid var(--border); border-radius: 14px; padding: 18px;
+    background: var(--bg); max-width: 760px;
+  }
+  .step .diagram-wrap svg { display: block; width: 100%; height: auto; max-width: 720px; margin: 0 auto; }
+  .step .diagram-cap { font-size: 13px; color: var(--fg-mute); margin-top: 8px; text-align: center; font-family: 'Geist Mono', monospace; letter-spacing: 0.05em; }
+
+  /* Confusions */
+  .confusions { display: grid; gap: 16px; margin-top: 24px; }
+  .conf { border: 1px solid var(--border); border-radius: 14px; padding: 22px 24px; background: var(--bg); }
+  .conf .num { font-family: 'Geist Mono', monospace; font-size: 11px; letter-spacing: 0.18em; color: var(--accent); text-transform: uppercase; margin-bottom: 6px; }
+  .conf .q { font-size: 18px; font-weight: 600; letter-spacing: -0.01em; margin: 0 0 8px; }
+  .conf .a { color: var(--fg-soft); font-size: 15.5px; line-height: 1.6; }
+
+  /* Next */
+  .next-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; margin-top: 24px; }
+  .next { border: 1px solid var(--border); border-radius: 14px; padding: 20px 22px; background: var(--bg); display: flex; flex-direction: column; gap: 8px; }
+  .next .tag { font-family: 'Geist Mono', monospace; font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--accent); }
+  .next .title { font-size: 16px; font-weight: 600; letter-spacing: -0.01em; }
+  .next .desc { font-size: 14px; color: var(--fg-soft); }
+  .next a { font-size: 14px; }
+
+  /* Footer */
+  footer { padding: 48px 0 64px; }
+  footer p { color: var(--fg-mute); font-size: 14px; margin: 0; text-align: center; }
+
+  /* SVG bindings */
+  .node { fill: var(--bg-elev); stroke: var(--border); }
+  .node-hot { fill: var(--accent-soft); stroke: var(--accent); }
+  .node-warn { fill: var(--warn-soft); stroke: var(--warn); }
+  .node-bad { fill: var(--bad-soft); stroke: var(--bad); }
+  .node-text { fill: var(--fg); font-family: 'Inter', sans-serif; font-size: 12.5px; font-weight: 500; text-anchor: middle; }
+  .node-sub { fill: var(--fg-soft); font-family: 'Geist Mono', monospace; font-size: 10px; text-anchor: middle; letter-spacing: 0.05em; }
+  .node-mini { fill: var(--fg); font-family: 'Geist Mono', monospace; font-size: 11px; text-anchor: middle; letter-spacing: 0.04em; }
+  .edge { stroke: var(--fg-mute); stroke-width: 1.2; fill: none; }
+  .edge-hot { stroke: var(--accent); stroke-width: 1.6; fill: none; }
+  .edge-warn { stroke: var(--warn); stroke-width: 1.4; fill: none; }
+  .edge-bad { stroke: var(--bad); stroke-width: 1.4; fill: none; }
+  .edge-label { fill: var(--fg-soft); font-family: 'Geist Mono', monospace; font-size: 10px; letter-spacing: 0.05em; }
+
+  .token { fill: var(--bg-elev); stroke: var(--border); rx: 4; }
+  .token-ok { fill: var(--accent-soft); stroke: var(--accent); }
+  .token-pending { fill: var(--cool-soft); stroke: var(--cool); }
+  .token-reject { fill: var(--bad-soft); stroke: var(--bad); }
+  .token-cut { fill: var(--warn-soft); stroke: var(--warn); stroke-dasharray: 3 2; }
+  .token-label { fill: var(--fg); font-family: 'Geist Mono', monospace; font-size: 11px; text-anchor: middle; }
+  .token-conf { fill: var(--fg-mute); font-family: 'Geist Mono', monospace; font-size: 9px; text-anchor: middle; }
+
+  .bar-bg { fill: var(--bg-elev); }
+  .bar-fill { fill: var(--accent); }
+  .bar-fill-warn { fill: var(--warn); }
+  .bar-fill-bad { fill: var(--bad); }
+  .bar-fill-cool { fill: var(--cool); }
+  .bar-label { fill: var(--fg); font-family: 'Inter', sans-serif; font-size: 11.5px; font-weight: 500; }
+  .bar-sub { fill: var(--fg-mute); font-family: 'Geist Mono', monospace; font-size: 9.5px; }
+  .bar-value { fill: var(--fg-soft); font-family: 'Geist Mono', monospace; font-size: 10px; text-anchor: end; }
+
+  .axis-line { stroke: var(--border); stroke-width: 1; }
+  .axis-tick { stroke: var(--fg-mute); stroke-width: 1; }
+  .axis-text { fill: var(--fg-mute); font-family: 'Geist Mono', monospace; font-size: 9.5px; }
+  .axis-title { fill: var(--fg); font-family: 'Geist Mono', monospace; font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase; }
+  .curve { fill: none; stroke: var(--accent); stroke-width: 1.8; }
+  .curve-bad { fill: none; stroke: var(--warn); stroke-width: 1.6; stroke-dasharray: 4 3; }
+
+  .legend-text { fill: var(--fg-soft); font-family: 'Geist Mono', monospace; font-size: 10.5px; letter-spacing: 0.05em; }
+
+  /* Animations */
+  @keyframes pulse-accent { 0%, 100% { opacity: 0.45; } 50% { opacity: 1; } }
+  @keyframes pulse-warn { 0%, 100% { opacity: 0.35; } 50% { opacity: 0.85; } }
+  @keyframes draw-line { from { stroke-dashoffset: 200; } to { stroke-dashoffset: 0; } }
+  @keyframes pop-in { 0% { opacity: 0; transform: scale(0.85); } 60% { opacity: 1; transform: scale(1.05); } 100% { opacity: 1; transform: scale(1); } }
+  @keyframes slide-up { 0% { opacity: 0; transform: translateY(8px); } 100% { opacity: 1; transform: translateY(0); } }
+  @keyframes blink { 0%, 50% { opacity: 1; } 51%, 100% { opacity: 0.3; } }
+  @keyframes flow { 0% { stroke-dashoffset: 12; } 100% { stroke-dashoffset: 0; } }
+  @keyframes sweep-fill { 0% { transform: scaleX(0); } 100% { transform: scaleX(1); } }
+  @keyframes glow { 0%, 100% { filter: drop-shadow(0 0 0 transparent); } 50% { filter: drop-shadow(0 0 4px var(--accent-ring)); } }
+  @keyframes bar-grow { 0% { transform: scaleY(0); } 100% { transform: scaleY(1); } }
+  @keyframes fade-in { 0% { opacity: 0; } 100% { opacity: 1; } }
+  @keyframes flicker { 0%, 92%, 100% { opacity: 1; } 94% { opacity: 0.2; } 96% { opacity: 1; } 98% { opacity: 0.4; } }
+  @keyframes rise { 0% { transform: translateY(6px); opacity: 0; } 100% { transform: translateY(0); opacity: 1; } }
+
+  .pulse-accent { animation: pulse-accent 1.8s ease-in-out infinite; }
+  .pulse-warn { animation: pulse-warn 1.4s ease-in-out infinite; }
+  .pop-in { animation: pop-in 600ms ease-out both; transform-origin: center; }
+  .slide-up { animation: slide-up 500ms ease-out both; }
+  .blink { animation: blink 1.6s ease-in-out infinite; }
+  .flow { stroke-dasharray: 6 6; animation: flow 1.2s linear infinite; }
+  .bar-grow { animation: bar-grow 800ms ease-out both; transform-origin: bottom; }
+  .fade-in { animation: fade-in 600ms ease-out both; }
+  .flicker { animation: flicker 4s linear; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .pulse-accent, .pulse-warn, .pop-in, .slide-up, .blink, .flow, .bar-grow, .fade-in, .flicker { animation: none !important; }
+    * { transition: none !important; }
+  }
+</style>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap" />
+</head>
+<body>
+
+<nav class="nav">
+  <div class="nav-inner">
+    <div class="brand"><span class="brand-mark"></span><span>Hermes / Daily Explainer</span></div>
+    <div class="nav-links">
+      <a href="#model">Model</a>
+      <a href="#walkthrough">Walkthrough</a>
+      <a href="#confusions">Confusions</a>
+      <a href="#next">Next</a>
+      <button class="theme-toggle" aria-label="Toggle theme" onclick="(function(){var h=document.documentElement;var c=h.getAttribute('data-theme')==='dark'?'light':'dark';h.setAttribute('data-theme',c);try{localStorage.setItem('hermes-theme',c);}catch(e){}})()">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+      </button>
+    </div>
+  </div>
+</nav>
+
+<!-- HERO -->
+<header class="hero">
+  <div class="wrap">
+    <span class="label">DAY 8: AI INFRASTRUCTURE / INFERENCE</span>
+    <h1>Load-Aware Speculative Decoding</h1>
+    <p class="tag">Speculative decoding only works when the drafter and the verifier stay roughly in sync. Under production load the verifier wastes its batch capacity on tokens that were going to be rejected anyway. The fix is to score every draft token's survival probability and let a scheduler cut the block short the second continuing to verify would cost more than it returns.</p>
+    <div class="youll-get">
+      <div class="yg"><span class="dot"></span><span>Why verifying every speculative token is a hidden tax once your engine is hot.</span></div>
+      <div class="yg"><span class="dot"></span><span>How a parallel drafter loses suffix coherence and what a lightweight sequential head restores.</span></div>
+      <div class="yg"><span class="dot"></span><span>The cumulative acceptance math that turns one confidence per position into a verification budget.</span></div>
+      <div class="yg"><span class="dot"></span><span>Why DSpark moved the DeepSeek-V4 serving Pareto frontier instead of shaving another 10%.</span></div>
+    </div>
+  </div>
+</header>
+
+<!-- ONE-SENTENCE MODEL -->
+<section id="model">
+  <div class="wrap">
+    <span class="section-label">ONE-SENTENCE MODEL</span>
+    <p class="lede">If you cannot state the thing in one sentence, you do not understand it yet. So start here.</p>
+    <div class="callout">
+      <span class="pre">THE MODEL</span>
+      Speculative decoding wastes verification capacity on suffix tokens that are almost certain to be rejected, so DSpark scores each draft position's survival probability, drops the low-confidence tail before the verifier sees it, and reoptimizes the surviving verification length every cycle using the engine's current batch-throughput curve.
+    </div>
+  </div>
+</section>
+
+<!-- MENTAL MODEL DIAGRAM -->
+<section id="mental-model">
+  <div class="wrap">
+    <span class="section-label">THE MENTAL MODEL</span>
+    <h2>One drafter, one verifier, a scheduler in the middle</h2>
+    <p class="lede">The whole system in one picture. Read the arrows: the parallel backbone drafts every position at once, the sequential head injects a tiny amount of dependency between them, the confidence head scores how likely each prefix is to survive verification, and the hardware-aware scheduler uses those scores plus the engine's batch-throughput curve to decide where to cut the block before sending it to the target model.</p>
+
+    <div class="mm-frame">
+      <svg viewBox="0 0 960 660" role="img" aria-label="DSpark architecture with parallel drafter, sequential head, confidence head, and hardware-aware scheduler" style="width:100%;max-width:880px;display:block;margin:0 auto;">
+        <defs>
+          <marker id="arr" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--fg-mute)"/></marker>
+          <marker id="arr-hot" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--accent)"/></marker>
+          <marker id="arr-warn" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--warn)"/></marker>
+        </defs>
+
+        <text x="460" y="22" text-anchor="middle" style="fill:var(--fg);font-family:'Geist Mono',monospace;font-size:12px;letter-spacing:0.15em;text-transform:uppercase;">DSPARK DRAFT-AND-VERIFY CYCLE</text>
+
+        <!-- 1. Previous accepted anchor token -->
+        <g transform="translate(40, 60)">
+          <rect x="0" y="0" width="120" height="48" rx="8" class="node"></rect>
+          <text x="60" y="22" class="node-text" style="font-size:12.5px">Anchor token</text>
+          <text x="60" y="38" class="node-sub">PREVIOUS ROUND</text>
+        </g>
+
+        <!-- 2. Parallel drafter backbone -->
+        <g transform="translate(220, 40)">
+          <rect x="0" y="0" width="220" height="260" rx="12" style="fill:var(--bg);stroke:var(--accent);stroke-width:1.5"></rect>
+          <text x="110" y="24" class="node-text" style="font-size:13px">Parallel backbone</text>
+          <text x="110" y="40" class="node-sub">ONE FORWARD PASS</text>
+
+          <!-- Inside: 5 draft positions, no inter-token dependency -->
+          <g transform="translate(16, 58)">
+            <rect x="0" y="0" width="36" height="36" rx="6" class="token token-pending"></rect>
+            <text x="18" y="22" class="token-label" style="font-size:12px">E</text>
+            <rect x="40" y="0" width="36" height="36" rx="6" class="token token-pending"></rect>
+            <text x="58" y="22" class="token-label" style="font-size:12px">F</text>
+            <rect x="80" y="0" width="36" height="36" rx="6" class="token token-pending"></rect>
+            <text x="98" y="22" class="token-label" style="font-size:12px">G</text>
+            <rect x="120" y="0" width="36" height="36" rx="6" class="token token-pending"></rect>
+            <text x="138" y="22" class="token-label" style="font-size:12px">H</text>
+            <rect x="160" y="0" width="36" height="36" rx="6" class="token token-pending"></rect>
+            <text x="178" y="22" class="token-label" style="font-size:12px">I</text>
+          </g>
+          <text x="110" y="118" class="node-sub" style="fill:var(--accent);font-size:9.5px;letter-spacing:0.04em">EACH POSITION PREDICTED INDEPENDENTLY</text>
+
+          <!-- Hidden states h1...h5 -->
+          <g transform="translate(16, 158)" style="opacity:0.75">
+            <rect x="0" y="0" width="36" height="22" rx="4" class="node"></rect>
+            <text x="18" y="14" class="node-mini" style="font-size:10px">h1</text>
+            <rect x="40" y="0" width="36" height="22" rx="4" class="node"></rect>
+            <text x="58" y="14" class="node-mini" style="font-size:10px">h2</text>
+            <rect x="80" y="0" width="36" height="22" rx="4" class="node"></rect>
+            <text x="98" y="14" class="node-mini" style="font-size:10px">h3</text>
+            <rect x="120" y="0" width="36" height="22" rx="4" class="node"></rect>
+            <text x="138" y="14" class="node-mini" style="font-size:10px">h4</text>
+            <rect x="160" y="0" width="36" height="22" rx="4" class="node"></rect>
+            <text x="178" y="14" class="node-mini" style="font-size:10px">h5</text>
+          </g>
+          <text x="110" y="200" class="node-sub" style="fill:var(--fg-mute);font-size:9.5px">HIDDEN STATES FLOW DOWN</text>
+        </g>
+
+        <!-- 3. Sequential head (Markov transition matrix) -->
+        <g transform="translate(220, 330)">
+          <rect x="0" y="0" width="220" height="92" rx="10" style="fill:var(--accent-soft);stroke:var(--accent);stroke-width:1.4"></rect>
+          <text x="110" y="22" class="node-text" style="font-size:12.5px">Sequential head</text>
+          <text x="110" y="38" class="node-sub" style="fill:var(--accent)">RESTORES INTRA-BLOCK DEPENDENCY</text>
+
+          <!-- Markov transition arrow -->
+          <g transform="translate(20, 56)">
+            <text x="0" y="10" class="node-sub" style="font-size:9.5px;fill:var(--fg-mute)">B(x_k-1, x_k)</text>
+            <path d="M 100 6 L 180 6" class="edge-hot" marker-end="url(#arr-hot)"></path>
+            <text x="100" y="22" text-anchor="middle" class="node-mini" style="font-size:9px;fill:var(--accent)">MARKOV BIAS</text>
+          </g>
+        </g>
+
+        <!-- 4. Confidence head (parallel output) -->
+        <g transform="translate(220, 450)">
+          <rect x="0" y="0" width="220" height="84" rx="10" style="fill:var(--cool-soft);stroke:var(--cool);stroke-width:1.4"></rect>
+          <text x="110" y="22" class="node-text" style="font-size:12.5px">Confidence head</text>
+          <text x="110" y="38" class="node-sub" style="fill:var(--cool)">PER-PARTITION SURVIVAL</text>
+
+          <g transform="translate(20, 52)">
+            <text x="0" y="14" class="node-mini" style="font-size:10px;fill:var(--fg-soft)">c1</text>
+            <text x="40" y="14" class="node-mini" style="font-size:10px;fill:var(--fg-soft)">c2</text>
+            <text x="80" y="14" class="node-mini" style="font-size:10px;fill:var(--fg-soft)">c3</text>
+            <text x="120" y="14" class="node-mini" style="font-size:10px;fill:var(--fg-soft)">c4</text>
+            <text x="160" y="14" class="node-mini" style="font-size:10px;fill:var(--fg-soft)">c5</text>
+          </g>
+        </g>
+
+        <!-- 5. Hardware-aware scheduler -->
+        <g transform="translate(490, 330)">
+          <rect x="0" y="0" width="240" height="220" rx="12" style="fill:var(--warn-soft);stroke:var(--warn);stroke-width:1.6"></rect>
+          <text x="120" y="24" class="node-text" style="font-size:13px">Hardware-aware scheduler</text>
+          <text x="120" y="40" class="node-sub" style="fill:var(--warn)">PER-CYCLE CUT DECISION</text>
+
+          <g transform="translate(16, 60)">
+            <rect x="0" y="0" width="208" height="40" rx="6" class="node"></rect>
+            <text x="104" y="16" class="node-text" style="font-size:11.5px">Prefix survival a_j = prod(c_i)</text>
+            <text x="104" y="30" class="node-sub" style="font-size:9.5px">CUMULATIVE PRODUCT</text>
+          </g>
+          <g transform="translate(16, 108)">
+            <rect x="0" y="0" width="208" height="40" rx="6" class="node"></rect>
+            <text x="104" y="16" class="node-text" style="font-size:11.5px">Throughput = tau &middot; SPS(B)</text>
+            <text x="104" y="30" class="node-sub" style="font-size:9.5px">STEPS-PER-SECOND CURVE</text>
+          </g>
+          <g transform="translate(16, 156)">
+            <rect x="0" y="0" width="208" height="44" rx="6" style="fill:var(--warn);"></rect>
+            <text x="104" y="20" text-anchor="middle" style="fill:#0d0d0d;font-family:'Geist Mono',monospace;font-size:11px;letter-spacing:0.12em;font-weight:600">GREEDY ADMIT &middot; EARLY STOP</text>
+            <text x="104" y="36" text-anchor="middle" style="fill:#0d0d0d;font-family:'Geist Mono',monospace;font-size:9.5px;letter-spacing:0.06em">cut block where Theta stops rising</text>
+          </g>
+        </g>
+
+        <!-- 6. Target verifier + result -->
+        <g transform="translate(800, 170)">
+          <rect x="0" y="0" width="120" height="200" rx="10" class="node-hot"></rect>
+          <text x="60" y="22" class="node-text" style="font-size:12.5px">Target verifier</text>
+          <text x="60" y="38" class="node-sub" style="fill:var(--accent)">ONE FORWARD PASS</text>
+
+          <g transform="translate(8, 56)">
+            <rect x="0" y="0" width="48" height="36" rx="6" class="token token-ok">
+              <animate attributeName="opacity" values="0.4;1;0.4" dur="2.2s" repeatCount="indefinite"/>
+            </rect>
+            <text x="24" y="22" class="token-label" style="font-size:11px">E</text>
+            <text x="24" y="34" class="token-conf" style="fill:var(--accent)">ACC</text>
+
+            <rect x="56" y="0" width="48" height="36" rx="6" class="token token-ok">
+              <animate attributeName="opacity" values="0.4;1;0.4" dur="2.2s" begin="0.2s" repeatCount="indefinite"/>
+            </rect>
+            <text x="80" y="22" class="token-label" style="font-size:11px">F</text>
+            <text x="80" y="34" class="token-conf" style="fill:var(--accent)">ACC</text>
+
+            <rect x="0" y="44" width="48" height="36" rx="6" class="token token-reject">
+              <animate attributeName="opacity" values="0.6;1;0.6" dur="1.4s" repeatCount="indefinite"/>
+            </rect>
+            <text x="24" y="66" class="token-label" style="font-size:11px">G</text>
+            <text x="24" y="78" class="token-conf" style="fill:var(--bad)">REJ</text>
+
+            <rect x="56" y="44" width="48" height="36" rx="6" class="token token-cut"></rect>
+            <text x="80" y="66" class="token-label" style="font-size:11px;fill:var(--fg-mute)">H</text>
+            <text x="80" y="78" class="token-conf" style="fill:var(--warn)">CUT</text>
+          </g>
+        </g>
+
+        <!-- arrows: anchor -> parallel -->
+        <path d="M 160 84 L 218 84" class="edge" marker-end="url(#arr)"></path>
+        <text x="189" y="76" text-anchor="middle" class="edge-label">anchor</text>
+
+        <!-- arrows: parallel h -> sequential -->
+        <path d="M 330 300 L 330 328" class="edge" marker-end="url(#arr)"></path>
+
+        <!-- arrows: parallel h -> confidence -->
+        <path d="M 360 300 C 380 320, 360 420, 330 448" class="edge" marker-end="url(#arr)"></path>
+
+        <!-- arrows: sequential -> drafter output (loop back, indicating refinement) -->
+        <path d="M 200 330 C 160 330, 160 290, 200 300" class="edge" stroke-dasharray="3 3" opacity="0.6"></path>
+        <text x="172" y="316" text-anchor="middle" class="edge-label" style="font-size:9.5px;fill:var(--fg-mute)">bias</text>
+
+        <!-- arrows: confidence -> scheduler -->
+        <path d="M 440 492 L 488 492" class="edge" marker-end="url(#arr-cool)"></path>
+        <text x="464" y="482" text-anchor="middle" class="edge-label" style="fill:var(--cool)">c_1..c_5</text>
+
+        <!-- arrows: scheduler -> verifier (the cut block) -->
+        <path d="M 730 440 C 760 440, 770 350, 800 280" class="edge-warn" marker-end="url(#arr-warn)" stroke-width="1.8">
+          <animate attributeName="stroke-dashoffset" from="14" to="0" dur="1s" repeatCount="indefinite" stroke-dasharray="6 4"/>
+        </path>
+        <text x="770" y="380" text-anchor="middle" class="edge-label" style="fill:var(--warn)">TRIMMED</text>
+
+        <!-- Bottom annotation -->
+        <g transform="translate(60, 600)">
+          <text x="0" y="0" class="legend-text" style="letter-spacing:0.12em">LEFT TO RIGHT: ANCHOR &rarr; PARALLEL DRAFT &rarr; SEQ HEAD REFINES &rarr; CONF HEAD SCORES &rarr; SCHED CUTS &rarr; TARGET VERIFIES</text>
+        </g>
+      </svg>
+    </div>
+    <p class="mm-caption">The honest summary of the diagram: a parallel backbone drafts five tokens at once, a tiny sequential head injects enough dependency that the suffix doesn't fall apart, a parallel confidence head scores every position, a scheduler turns those scores into a verification length using the engine's current batch-throughput curve, and only then does the target model verify the surviving prefix. In the picture the scheduler cuts after F because G's rejection probability dominates the marginal cost of verifying another token.</p>
+  </div>
+</section>
+
+<!-- WALKTHROUGH -->
+<section id="walkthrough">
+  <div class="wrap">
+    <span class="section-label">WALKTHROUGH</span>
+    <h2>Six pieces, in order</h2>
+    <p class="lede">Each section is one paragraph, one diagram, and one reason it matters. No more.</p>
+
+    <div class="walk">
+
+      <!-- 1. The bottleneck: speed is not the bottleneck anymore -->
+      <div class="step">
+        <h3>1. Speculative decoding moved the bottleneck from drafting to verification</h3>
+        <p>Classic speculative decoding has two phases per cycle. A small draft model proposes <code>&gamma;</code> candidate tokens one at a time. A big target model verifies all of them in a single forward pass and accepts the longest prefix consistent with its own distribution. The per-token cost is <code>L = (T_draft + T_verify) / &tau;</code>, where <code>&tau;</code> is the accepted length. Modern parallel drafters like DFlash drive <code>T_draft</code> toward a constant by emitting the whole block in one pass, so <code>T_verify</code> stops being cheap just because the drafter got faster. The new question is no longer "can we draft more" but "is verifying more actually returning anything?".</p>
+        <div class="diagram-wrap">
+          <svg viewBox="0 0 720 320" role="img" aria-label="Bar chart showing draft, verify, and accepted contributions to per-token latency" style="width:100%;max-width:700px;display:block;margin:0 auto;">
+            <text x="360" y="22" text-anchor="middle" style="fill:var(--fg);font-family:'Geist Mono',monospace;font-size:11px;letter-spacing:0.15em;text-transform:uppercase;">PER-TOKEN LATENCY BUDGET</text>
+
+            <!-- Three bars -->
+            <!-- AR drafter -->
+            <g transform="translate(80, 60)">
+              <text x="0" y="-4" class="bar-label" style="font-size:12px">AR drafter</text>
+              <text x="0" y="10" class="bar-sub">Eagle3 &middot; &tau;=2.7</text>
+              <g transform="translate(0, 24)">
+                <rect x="0" y="0" width="60" height="160" rx="3" class="bar-bg"></rect>
+                <rect x="0" y="0" width="60" height="100" rx="3" class="bar-fill-cool bar-grow"></rect>
+                <text x="30" y="118" text-anchor="middle" class="bar-value" style="fill:var(--cool)">T_draft</text>
+                <rect x="0" y="100" width="60" height="60" rx="3" class="bar-fill"></rect>
+                <text x="30" y="150" text-anchor="middle" class="bar-value" style="fill:var(--accent)">T_verify</text>
+              </g>
+              <text x="30" y="220" text-anchor="middle" class="bar-label" style="font-size:11px">L = 1.0x</text>
+            </g>
+
+            <!-- Parallel drafter -->
+            <g transform="translate(280, 60)">
+              <text x="0" y="-4" class="bar-label" style="font-size:12px">Parallel drafter</text>
+              <text x="0" y="10" class="bar-sub">DFlash &middot; &tau;=3.0</text>
+              <g transform="translate(0, 24)">
+                <rect x="0" y="0" width="60" height="160" rx="3" class="bar-bg"></rect>
+                <rect x="0" y="0" width="60" height="22" rx="3" class="bar-fill-cool bar-grow"></rect>
+                <text x="30" y="40" text-anchor="middle" class="bar-value" style="fill:var(--cool)">T_d</text>
+                <rect x="0" y="22" width="60" height="138" rx="3" class="bar-fill bar-grow" style="animation-delay:80ms"></rect>
+                <text x="30" y="150" text-anchor="middle" class="bar-value" style="fill:var(--accent)">T_verify</text>
+              </g>
+              <text x="30" y="220" text-anchor="middle" class="bar-label" style="font-size:11px">L = 0.94x</text>
+            </g>
+
+            <!-- DSpark -->
+            <g transform="translate(480, 60)">
+              <text x="0" y="-4" class="bar-label" style="font-size:12px">DSpark (this paper)</text>
+              <text x="0" y="10" class="bar-sub">&tau;=3.6 &middot; scheduled</text>
+              <g transform="translate(0, 24)">
+                <rect x="0" y="0" width="60" height="160" rx="3" class="bar-bg"></rect>
+                <rect x="0" y="0" width="60" height="22" rx="3" class="bar-fill-cool bar-grow"></rect>
+                <text x="30" y="40" text-anchor="middle" class="bar-value" style="fill:var(--cool)">T_d</text>
+                <rect x="0" y="22" width="60" height="98" rx="3" class="bar-fill bar-grow" style="animation-delay:80ms"></rect>
+                <text x="30" y="130" text-anchor="middle" class="bar-value" style="fill:var(--accent)">T_v</text>
+              </g>
+              <text x="30" y="220" text-anchor="middle" class="bar-label" style="font-size:11px">L = 0.83x</text>
+            </g>
+
+            <!-- X axis -->
+            <g transform="translate(40, 280)">
+              <line x1="0" y1="0" x2="640" y2="0" class="axis-line"></line>
+              <text x="320" y="22" text-anchor="middle" class="axis-title">RELATIVE TIME PER TOKEN (LOWER IS BETTER)</text>
+            </g>
+
+            <!-- Annotations -->
+            <g transform="translate(80, 30)">
+              <text x="0" y="0" class="legend-text" style="font-size:9.5px;fill:var(--cool)">DRAFTING COST</text>
+            </g>
+            <g transform="translate(310, 30)">
+              <text x="0" y="0" class="legend-text" style="font-size:9.5px;fill:var(--accent)">VERIFICATION COST</text>
+            </g>
+          </svg>
+        </div>
+        <p class="diagram-cap">Parallel drafting kills T_draft but the verifier now dominates. DSpark cuts T_verify by trimming the draft block.</p>
+        <div class="why">
+          <span class="why-label">WHY THIS MATTERS</span>
+          <b>Engineers used to optimize for &tau; (acceptance length). Once a parallel drafter makes drafting free, the right optimization target is no longer "draft better" but "verify smarter". The whole paper exists because that reframe changed which number the scheduler tries to maximize.</b>
+        </div>
+      </div>
+
+      <!-- 2. Parallel drafters lose suffix coherence -->
+      <div class="step">
+        <h3>2. Parallel drafters lose suffix coherence, and the failure is structural</h3>
+        <p>A parallel drafter predicts every draft position in one forward pass. Because no position can condition on the tokens actually sampled at the earlier positions, it marginalizes over all possible predecessors. When the context has multiple plausible continuations like "of course" and "no problem", the parallel drafter produces incoherent combinations such as "of problem" or "no course". Acceptance rate decays sharply toward the right side of the block. The empirical trace: curve is the autoregressive drafter (Eagle3) which stays stable, the dashed curve is DFlash whose suffix acceptance collapses, and the third curve is the headline result that the semi-autoregressive head restores much of the late-block acceptance.</p>
+        <div class="diagram-wrap">
+          <svg viewBox="0 0 720 320" role="img" aria-label="Position-wise acceptance curves comparing Eagle3, DFlash, and DSpark" style="width:100%;max-width:700px;display:block;margin:0 auto;">
+            <text x="360" y="22" text-anchor="middle" style="fill:var(--fg);font-family:'Geist Mono',monospace;font-size:11px;letter-spacing:0.15em;text-transform:uppercase;">CONDITIONAL ACCEPTANCE AT EACH DRAFT POSITION</text>
+
+            <!-- Plot area -->
+            <g transform="translate(80, 60)">
+              <!-- grid -->
+              <line x1="0" y1="0" x2="0" y2="200" class="axis-line"></line>
+              <line x1="0" y1="0" x2="540" y2="0" class="axis-line"></line>
+              <line x1="0" y1="200" x2="540" y2="200" class="axis-line"></line>
+
+              <!-- y grid -->
+              <line x1="0" y1="50" x2="540" y2="50" stroke="var(--border)" stroke-dasharray="2 4" opacity="0.5"/>
+              <line x1="0" y1="100" x2="540" y2="100" stroke="var(--border)" stroke-dasharray="2 4" opacity="0.5"/>
+              <line x1="0" y1="150" x2="540" y2="150" stroke="var(--border)" stroke-dasharray="2 4" opacity="0.5"/>
+
+              <!-- y labels -->
+              <text x="-6" y="4" text-anchor="end" class="axis-text">1.0</text>
+              <text x="-6" y="54" text-anchor="end" class="axis-text">0.75</text>
+              <text x="-6" y="104" text-anchor="end" class="axis-text">0.50</text>
+              <text x="-6" y="154" text-anchor="end" class="axis-text">0.25</text>
+              <text x="-6" y="204" text-anchor="end" class="axis-text">0.0</text>
+
+              <!-- x positions -->
+              <text x="0" y="218" text-anchor="middle" class="axis-text">k=1</text>
+              <text x="135" y="218" text-anchor="middle" class="axis-text">k=2</text>
+              <text x="270" y="218" text-anchor="middle" class="axis-text">k=3</text>
+              <text x="405" y="218" text-anchor="middle" class="axis-text">k=4</text>
+              <text x="540" y="218" text-anchor="middle" class="axis-text">k=5</text>
+
+              <!-- Eagle3 (autoregressive, stays stable) -->
+              <path d="M 0 30 C 60 28, 100 32, 135 36 S 240 30, 270 28 S 380 34, 405 32 S 510 30, 540 32" class="curve" stroke="var(--cool)" stroke-dasharray="0"></path>
+
+              <!-- DFlash (parallel, suffix decay) -->
+              <path d="M 0 32 C 60 50, 100 90, 135 130 S 240 178, 270 188 S 380 192, 405 194 S 510 195, 540 196" class="curve-bad"></path>
+
+              <!-- DSpark (semi-AR, restored) -->
+              <path d="M 0 28 C 60 40, 100 56, 135 70 S 240 76, 270 80 S 380 86, 405 92 S 510 96, 540 100" stroke="var(--accent)" stroke-width="1.8" fill="none"></path>
+
+              <!-- Endpoint labels -->
+              <g transform="translate(546, 22)">
+                <rect x="-2" y="-10" width="80" height="20" rx="4" style="fill:var(--bg);stroke:var(--cool)"></rect>
+                <text x="38" y="4" text-anchor="middle" class="legend-text" style="fill:var(--cool);font-size:10px">Eagle3 (AR)</text>
+              </g>
+              <g transform="translate(546, 188)">
+                <rect x="-2" y="-10" width="76" height="20" rx="4" style="fill:var(--bg);stroke:var(--warn)"></rect>
+                <text x="36" y="4" text-anchor="middle" class="legend-text" style="fill:var(--warn);font-size:10px">DFlash</text>
+              </g>
+              <g transform="translate(546, 92)">
+                <rect x="-2" y="-10" width="80" height="20" rx="4" style="fill:var(--bg);stroke:var(--accent)"></rect>
+                <text x="38" y="4" text-anchor="middle" class="legend-text" style="fill:var(--accent);font-size:10px">DSpark</text>
+              </g>
+
+              <!-- X title -->
+              <text x="270" y="240" text-anchor="middle" class="axis-title">DRAFT POSITION k</text>
+            </g>
+
+            <text x="360" y="310" text-anchor="middle" class="legend-text" style="font-size:10px;letter-spacing:0.1em">REJECTION-SIDE CURVE COLLAPSE IS A PURE MODELING ARTIFACT, NOT A LOAD ISSUE</text>
+          </svg>
+        </div>
+        <p class="diagram-cap">The dashed curve is the symptom DSpark targets: a perfectly good early-position capacity wasted because later positions fall out of distribution.</p>
+        <div class="why">
+          <span class="why-label">WHY THIS MATTERS</span>
+          <b>The trap is to throw more parameters at the drafter. DSpark's cheaper fix is a lightweight sequential head that biases each position by the token that was actually sampled before it. Restoring suffix acceptance with <code>r=256</code> additional parameters is dramatically cheaper than doubling drafter depth.</b>
+        </div>
+      </div>
+
+      <!-- 3. The two instantiations of the sequential head -->
+      <div class="step">
+        <h3>3. Two cheap ways to inject intra-block dependency</h3>
+        <p>DSpark ships two sequential heads. The Markov head stores a low-rank transition matrix <code>B = W_1 W_2</code> with rank <code>r=256</code>, where <code>W_1</code> is a vocabulary-sized row and <code>W_2</code> projects back into a logit bias. Once position 1 samples a particular token, the head bumps up continuations that follow it in the training data and suppresses the others. The RNN head keeps a recurrent state <code>s_k</code> updated by a single gated linear unit that mixes the previous state, the previous token embedding, and the parallel backbone's hidden state at the current position. Both heads have to be cheap enough that <code>T_sequential &lt;&lt; T_parallel</code>, otherwise the speed advantage of the parallel backbone disappears. The Markov head is the default; the RNN head buys more suffix acceptance at a small additional latency cost.</p>
+        <div class="diagram-wrap">
+          <svg viewBox="0 0 720 280" role="img" aria-label="Markov head low-rank transition plus RNN head gated update" style="width:100%;max-width:700px;display:block;margin:0 auto;">
+            <text x="360" y="22" text-anchor="middle" style="fill:var(--fg);font-family:'Geist Mono',monospace;font-size:11px;letter-spacing:0.15em;text-transform:uppercase;">MARKOV HEAD vs RNN HEAD</text>
+
+            <!-- Markov head -->
+            <g transform="translate(40, 60)">
+              <rect x="0" y="0" width="300" height="180" rx="10" style="fill:var(--bg-elev);stroke:var(--border)"></rect>
+              <text x="150" y="22" text-anchor="middle" class="node-text" style="font-size:12.5px">Markov head</text>
+              <text x="150" y="38" class="node-sub" style="font-size:9.5px">r = 256 LOW-RANK</text>
+
+              <!-- diagram inside -->
+              <g transform="translate(20, 60)">
+                <rect x="0" y="0" width="48" height="36" rx="6" class="token"></rect>
+                <text x="24" y="22" class="token-label" style="font-size:11px">x_k-1</text>
+                <path d="M 48 18 L 80 18" class="edge" marker-end="url(#arr)"></path>
+                <rect x="80" y="0" width="36" height="36" rx="6" class="node-hot"></rect>
+                <text x="98" y="22" class="token-label" style="font-size:10px">W_1</text>
+                <path d="M 116 18 L 148 18" class="edge" marker-end="url(#arr)"></path>
+                <rect x="148" y="0" width="36" height="36" rx="6" class="node-hot"></rect>
+                <text x="166" y="22" class="token-label" style="font-size:10px">W_2</text>
+                <path d="M 184 18 L 216 18" class="edge" marker-end="url(#arr)"></path>
+                <rect x="216" y="0" width="48" height="36" rx="6" class="token-pending"></rect>
+                <text x="240" y="22" class="token-label" style="font-size:10px">B(v)</text>
+              </g>
+              <text x="150" y="124" class="node-sub" style="font-size:9.5px">B(x_k-1, x_k) = W_1[x_k-1] &middot; W_2</text>
+              <text x="150" y="142" class="node-sub" style="font-size:9.5px;fill:var(--accent)">DEFAULT &middot; FASTEST</text>
+              <text x="150" y="164" class="legend-text" style="font-size:9.5px;fill:var(--fg-mute)">memoryless beyond one step</text>
+            </g>
+
+            <!-- RNN head -->
+            <g transform="translate(380, 60)">
+              <rect x="0" y="0" width="300" height="180" rx="10" style="fill:var(--bg-elev);stroke:var(--accent);stroke-width:1.3"></rect>
+              <text x="150" y="22" text-anchor="middle" class="node-text" style="font-size:12.5px">RNN head</text>
+              <text x="150" y="38" class="node-sub" style="font-size:9.5px;fill:var(--accent)">FULL PREFIX MEMORY</text>
+
+              <g transform="translate(20, 60)">
+                <rect x="0" y="0" width="36" height="36" rx="6" class="node"></rect>
+                <text x="18" y="22" class="token-label" style="font-size:9.5px">s_{k-1}</text>
+                <rect x="44" y="0" width="36" height="36" rx="6" class="node"></rect>
+                <text x="62" y="22" class="token-label" style="font-size:9.5px">W_1</text>
+                <rect x="88" y="0" width="36" height="36" rx="6" class="node"></rect>
+                <text x="106" y="22" class="token-label" style="font-size:9.5px">h_k</text>
+
+                <path d="M 62 38 L 150 60" class="edge" marker-end="url(#arr)"></path>
+                <path d="M 106 38 L 150 60" class="edge" marker-end="url(#arr)"></path>
+                <path d="M 18 38 L 150 60" class="edge" marker-end="url(#arr)"></path>
+
+                <rect x="148" y="56" width="60" height="40" rx="6" class="node-hot"></rect>
+                <text x="178" y="78" class="token-label" style="font-size:10px">GLU</text>
+
+                <path d="M 208 76 L 234 76" class="edge-hot" marker-end="url(#arr-hot)"></path>
+                <rect x="236" y="56" width="48" height="40" rx="6" class="token-pending"></rect>
+                <text x="260" y="78" class="token-label" style="font-size:10px">B(v)</text>
+              </g>
+              <text x="150" y="142" class="node-sub" style="font-size:9.5px;fill:var(--accent)">BETTER SUFFIX COHERENCE</text>
+              <text x="150" y="164" class="legend-text" style="font-size:9.5px;fill:var(--fg-mute)">~10% additional draft latency</text>
+            </g>
+
+            <text x="360" y="262" text-anchor="middle" class="legend-text" style="font-size:10px;letter-spacing:0.1em">BOTH HEADS ADD &lt; 1% OF DRAFT LATENCY &middot; BOTH RESTORE 25%+ SUFFIX ACCEPTANCE</text>
+          </svg>
+        </div>
+        <p class="diagram-cap">The sequential head sits behind the parallel backbone and feeds back into the logit before sampling. The trick is keeping its compute proportional to <code>&gamma;</code> but its depth constant.</p>
+        <div class="why">
+          <span class="why-label">WHY THIS MATTERS</span>
+          <b>This is the part of the paper that should reset your priors about drafters. A 256-rank matrix is ~3KB of parameters. The reason nobody tried this trick before is that they were optimizing &tau; on its own. Once you also care about the verifier, a tiny dependency fix becomes a free 30% order-of-magnitude improvement on the headline metric.</b>
+        </div>
+      </div>
+
+      <!-- 4. The confidence head + cumulative acceptance -->
+      <div class="step">
+        <h3>4. A confidence head scores each draft position independently</h3>
+        <p>DSpark attaches a parallel confidence head that outputs a scalar <code>c_k</code> per position. The head is a single linear projection followed by a sigmoid, taking the parallel backbone's hidden state and the Markov embedding of the previously sampled token. It is supervised against the analytical per-step acceptance rate <code>c*_k = 1 - 0.5 &middot; ||p^d - p^t||_1</code>, which is the exact probability that the draft token at position <code>k</code> survives target verification. To make the scores usable as cumulative probabilities, DSpark adds Sequential Temperature Scaling: for each position <code>k</code>, it grid-searches a temperature that minimizes the Expected Calibration Error of the cumulative product <code>a_j = prod_{i &le; j} c_i</code>, keeping earlier positions fixed. The result is a calibrated survival curve <code>a_1 &ge; a_2 &ge; ... &ge; a_&gamma;</code> the scheduler can sort on.</p>
+        <div class="diagram-wrap">
+          <svg viewBox="0 0 720 300" role="img" aria-label="Per-position confidence scores and cumulative survival curve" style="width:100%;max-width:700px;display:block;margin:0 auto;">
+            <text x="360" y="22" text-anchor="middle" style="fill:var(--fg);font-family:'Geist Mono',monospace;font-size:11px;letter-spacing:0.15em;text-transform:uppercase;">CONFIDENCE PER POSITION vs CUMULATIVE SURVIVAL</text>
+
+            <!-- Per-position bars -->
+            <g transform="translate(80, 60)">
+              <text x="0" y="-4" class="bar-label" style="font-size:11px">Per-position confidence</text>
+              <g transform="translate(0, 8)">
+                <!-- position k=1: c=0.96 -->
+                <rect x="0" y="20" width="40" height="120" rx="3" class="bar-bg"></rect>
+                <rect x="0" y="24" width="40" height="116" rx="3" class="bar-fill bar-grow"></rect>
+                <text x="20" y="160" text-anchor="middle" class="axis-text">k=1</text>
+                <text x="20" y="14" text-anchor="middle" class="bar-value" style="fill:var(--accent)">0.96</text>
+
+                <rect x="60" y="20" width="40" height="120" rx="3" class="bar-bg"></rect>
+                <rect x="60" y="32" width="40" height="108" rx="3" class="bar-fill bar-grow" style="animation-delay:60ms"></rect>
+                <text x="80" y="160" text-anchor="middle" class="axis-text">k=2</text>
+                <text x="80" y="14" text-anchor="middle" class="bar-value" style="fill:var(--accent)">0.89</text>
+
+                <rect x="120" y="20" width="40" height="120" rx="3" class="bar-bg"></rect>
+                <rect x="120" y="60" width="40" height="80" rx="3" class="bar-fill-warn bar-grow" style="animation-delay:120ms"></rect>
+                <text x="140" y="160" text-anchor="middle" class="axis-text">k=3</text>
+                <text x="140" y="14" text-anchor="middle" class="bar-value" style="fill:var(--warn)">0.61</text>
+
+                <rect x="180" y="20" width="40" height="120" rx="3" class="bar-bg"></rect>
+                <rect x="180" y="80" width="40" height="60" rx="3" class="bar-fill-bad bar-grow" style="animation-delay:180ms"></rect>
+                <text x="200" y="160" text-anchor="middle" class="axis-text">k=4</text>
+                <text x="200" y="14" text-anchor="middle" class="bar-value" style="fill:var(--bad)">0.38</text>
+
+                <rect x="240" y="20" width="40" height="120" rx="3" class="bar-bg"></rect>
+                <rect x="240" y="100" width="40" height="40" rx="3" class="bar-fill-bad bar-grow" style="animation-delay:240ms"></rect>
+                <text x="260" y="160" text-anchor="middle" class="axis-text">k=5</text>
+                <text x="260" y="14" text-anchor="middle" class="bar-value" style="fill:var(--bad)">0.22</text>
+              </g>
+            </g>
+
+            <!-- Cumulative survival curve -->
+            <g transform="translate(440, 60)">
+              <text x="0" y="-4" class="bar-label" style="font-size:11px">Cumulative survival a_j</text>
+              <g transform="translate(0, 8)">
+                <line x1="0" y1="0" x2="0" y2="120" class="axis-line"></line>
+                <line x1="0" y1="0" x2="240" y2="0" class="axis-line"></line>
+                <line x1="0" y1="120" x2="240" y2="120" class="axis-line"></line>
+                <text x="-6" y="4" text-anchor="end" class="axis-text">1.0</text>
+                <text x="-6" y="64" text-anchor="end" class="axis-text">0.5</text>
+                <text x="-6" y="124" text-anchor="end" class="axis-text">0.0</text>
+                <text x="0" y="140" text-anchor="middle" class="axis-text">1</text>
+                <text x="60" y="140" text-anchor="middle" class="axis-text">2</text>
+                <text x="120" y="140" text-anchor="middle" class="axis-text">3</text>
+                <text x="180" y="140" text-anchor="middle" class="axis-text">4</text>
+                <text x="240" y="140" text-anchor="middle" class="axis-text">5</text>
+
+                <!-- Curve: 0.96, 0.85, 0.52, 0.20, 0.044 -->
+                <path d="M 0 6 C 20 14, 40 24, 60 30 S 100 84, 120 92 S 160 132, 180 140 S 220 145, 240 148" class="curve" stroke="var(--accent)"></path>
+
+                <!-- Points -->
+                <circle cx="0" cy="6" r="3.5" class="rr-point-frontier" style="fill:var(--accent)"></circle>
+                <circle cx="60" cy="30" r="3.5" class="rr-point-frontier" style="fill:var(--accent)"></circle>
+                <circle cx="120" cy="92" r="3.5" class="rr-point-frontier" style="fill:var(--accent)"></circle>
+                <circle cx="180" cy="140" r="3.5" class="rr-point-frontier" style="fill:var(--accent)"></circle>
+                <circle cx="240" cy="148" r="3.5" class="rr-point-frontier" style="fill:var(--accent)"></circle>
+
+                <!-- Cut marker at K = 2 -->
+                <line x1="60" y1="0" x2="60" y2="120" stroke="var(--warn)" stroke-width="1.4" stroke-dasharray="3 3"/>
+                <text x="60" y="-6" text-anchor="middle" class="bar-value" style="fill:var(--warn)">CUT @ k=2</text>
+              </g>
+              <text x="120" y="180" text-anchor="middle" class="axis-title">DRAFT POSITION</text>
+            </g>
+
+            <text x="360" y="280" text-anchor="middle" class="legend-text" style="font-size:10px;letter-spacing:0.1em">a_j = prod_{i &le; j} c_i &middot; EARLY STOP WHERE MARGINAL GAIN TURNS NEGATIVE</text>
+          </svg>
+        </div>
+        <p class="diagram-cap">Per-position confidence is noisy and drops sharply; cumulative survival is monotonic and is what the scheduler actually consumes.</p>
+        <div class="why">
+          <span class="why-label">WHY THIS MATTERS</span>
+          <b>The confidence head is the linchpin. Naive drafters use a threshold ("stop if any c_k &lt; 0.5") which is rank-only and ignores system load. DSpark needs absolute survival probabilities because the scheduler multiplies them by the engine's batch-throughput curve to maximize expected system throughput. Calibration via Sequential Temperature Scaling is what makes the optimization correct.</b>
+        </div>
+      </div>
+
+      <!-- 5. The scheduler -->
+      <div class="step">
+        <h3>5. The scheduler trades marginal acceptance against marginal batch cost</h3>
+        <p>Every cycle, the scheduler sees a batch of <code>R</code> active requests each with confidence sequence <code>c_{r,1..&gamma;}</code>. It computes prefix survival <code>a_{r,j} = prod_{i &le; j} c_{r,i}</code> for every position, sorts all <code>(r, j)</code> pairs by <code>a_{r,j}</code> descending, and greedily walks that sorted list admitting one prefix extension at a time. After each admission it recomputes expected throughput <code>&Theta; = &tau; &middot; SPS(B)</code> where <code>SPS(B)</code> is a precomputed steps-per-second table for the engine at batch size <code>B = sum (1 + &ell;_r)</code>. As soon as <code>&Theta;</code> stops rising the scheduler breaks and returns the current prefix lengths. The early-stop is not just an optimization; it is also the mechanism that preserves the lossless guarantee, because admitting the next prefix extension requires the next survival probability which requires the previously sampled token.</p>
+        <div class="diagram-wrap">
+          <svg viewBox="0 0 720 320" role="img" aria-label="Greedy scheduler walking sorted candidates and tracking throughput Theta" style="width:100%;max-width:700px;display:block;margin:0 auto;">
+            <text x="360" y="22" text-anchor="middle" style="fill:var(--fg);font-family:'Geist Mono',monospace;font-size:11px;letter-spacing:0.15em;text-transform:uppercase;">GREEDY ADMIT &middot; EARLY STOP ON &Theta;</text>
+
+            <!-- Pool of candidates (sorted) -->
+            <g transform="translate(40, 50)">
+              <text x="0" y="0" class="bar-label" style="font-size:11.5px">Global candidate pool (sorted by a)</text>
+              <g transform="translate(0, 10)">
+                <rect x="0" y="0" width="32" height="20" rx="3" class="token-ok"></rect>
+                <text x="16" y="14" class="token-label" style="font-size:10px">0.94</text>
+                <rect x="36" y="0" width="32" height="20" rx="3" class="token-ok"></rect>
+                <text x="52" y="14" class="token-label" style="font-size:10px">0.89</text>
+                <rect x="72" y="0" width="32" height="20" rx="3" class="token-ok"></rect>
+                <text x="88" y="14" class="token-label" style="font-size:10px">0.84</text>
+                <rect x="108" y="0" width="32" height="20" rx="3" class="token-pending"></rect>
+                <text x="124" y="14" class="token-label" style="font-size:10px">0.71</text>
+                <rect x="144" y="0" width="32" height="20" rx="3" class="token-pending"></rect>
+                <text x="160" y="14" class="token-label" style="font-size:10px">0.62</text>
+                <rect x="180" y="0" width="32" height="20" rx="3" class="token-cut"></rect>
+                <text x="196" y="14" class="token-label" style="font-size:10px">0.41</text>
+                <rect x="216" y="0" width="32" height="20" rx="3" class="token-cut"></rect>
+                <text x="232" y="14" class="token-label" style="font-size:10px">0.28</text>
+                <rect x="252" y="0" width="32" height="20" rx="3" class="token-reject"></rect>
+                <text x="268" y="14" class="token-label" style="font-size:10px">0.18</text>
+              </g>
+            </g>
+
+            <!-- Theta curve -->
+            <g transform="translate(40, 110)">
+              <line x1="0" y1="0" x2="0" y2="160" class="axis-line"></line>
+              <line x1="0" y1="160" x2="640" y2="160" class="axis-line"></line>
+              <text x="-6" y="4" text-anchor="end" class="axis-text">peak</text>
+              <text x="-6" y="84" text-anchor="end" class="axis-text">mid</text>
+              <text x="-6" y="164" text-anchor="end" class="axis-text">0</text>
+
+              <!-- Theta curve: rises then falls -->
+              <path d="M 0 160 C 60 130, 120 90, 200 60 S 360 60, 400 64 S 500 90, 600 130 S 640 152, 640 160" stroke="var(--accent)" stroke-width="1.8" fill="none"/>
+
+              <!-- Peak marker -->
+              <circle cx="320" cy="58" r="4" style="fill:var(--accent)">
+                <animate attributeName="r" values="3;6;3" dur="1.6s" repeatCount="indefinite"/>
+              </circle>
+              <text x="320" y="44" text-anchor="middle" class="legend-text" style="font-size:10px;fill:var(--accent)">&Theta; PEAK</text>
+
+              <!-- Early stop marker -->
+              <line x1="380" y1="60" x2="380" y2="160" stroke="var(--warn)" stroke-width="1.4" stroke-dasharray="3 3"/>
+              <text x="380" y="178" text-anchor="middle" class="legend-text" style="font-size:10px;fill:var(--warn)">EARLY STOP</text>
+
+              <!-- x-axis labels -->
+              <text x="0" y="178" text-anchor="middle" class="axis-text">admit 1</text>
+              <text x="200" y="178" text-anchor="middle" class="axis-text">admit 4</text>
+              <text x="400" y="178" text-anchor="middle" class="axis-text">admit 8</text>
+              <text x="640" y="178" text-anchor="middle" class="axis-text">admit &infin;</text>
+            </g>
+
+            <text x="360" y="310" text-anchor="middle" class="legend-text" style="font-size:10px;letter-spacing:0.1em">MAXIMIZE &tau; &middot; SPS(B) &middot; STOP WHEN ADMITTING MORE LOWERS IT</text>
+          </svg>
+        </div>
+        <p class="diagram-cap">Theta rises while marginal acceptance exceeds marginal batch cost, peaks, then declines as additional tokens cost more batch capacity than they return. The scheduler stops at the peak.</p>
+        <div class="why">
+          <span class="why-label">WHY THIS MATTERS</span>
+          <b>Most production schedulers use one of two extremes: a fixed block length (simple, brittle under load) or a per-token threshold (rank-only, ignores cost). DSpark's formulation turns verification length into an actual optimization problem whose solution is a hard guarantee of monotonicity. Greedy admit + early stop is both the algorithm and the lossless proof in one move.</b>
+        </div>
+      </div>
+
+      <!-- 6. The deployment result -->
+      <div class="step">
+        <h3>6. In DeepSeek-V4 live traffic, this moved the serving Pareto frontier</h3>
+        <p>DSpark was deployed inside the DeepSeek-V4 serving stack and benchmarked against the prior MTP-1 production baseline. Per-user generation speed rose 60% to 85% on V4-Flash and 57% to 78% on V4-Pro at matched aggregate throughput. The more interesting number is what happens at strict Service Level Agreement tiers: under 120 TPS on V4-Flash and 50 TPS on V4-Pro, the baseline throughput collapses while DSpark keeps climbing. The scheduler is the part that survives a hard SLA: by trimming verification under contention, the engine stays out of the throughput cliff that would otherwise force a worse-tail-latency trade-off. This is why the paper claims a Pareto shift rather than a 10% gain.</p>
+        <div class="diagram-wrap">
+          <svg viewBox="0 0 720 320" role="img" aria-label="Serving Pareto frontier before and after DSpark under increasing concurrency" style="width:100%;max-width:700px;display:block;margin:0 auto;">
+            <text x="360" y="22" text-anchor="middle" style="fill:var(--fg);font-family:'Geist Mono',monospace;font-size:11px;letter-spacing:0.15em;text-transform:uppercase;">SERVING PARETO: PER-USER SPEED vs AGGREGATE THROUGHPUT</text>
+
+            <g transform="translate(80, 50)">
+              <line x1="0" y1="0" x2="0" y2="220" class="axis-line"></line>
+              <line x1="0" y1="220" x2="540" y2="220" class="axis-line"></line>
+              <text x="-6" y="4" text-anchor="end" class="axis-text">85 t/s</text>
+              <text x="-6" y="56" text-anchor="end" class="axis-text">60</text>
+              <text x="-6" y="108" text-anchor="end" class="axis-text">40</text>
+              <text x="-6" y="160" text-anchor="end" class="axis-text">20</text>
+              <text x="-6" y="224" text-anchor="end" class="axis-text">0</text>
+              <text x="540" y="234" text-anchor="end" class="axis-text">peak throughput</text>
+              <text x="0" y="252" text-anchor="middle" class="axis-title">PER-USER GEN SPEED (t/s)</text>
+              <text x="270" y="270" text-anchor="middle" class="axis-title">AGGREGATE THROUGHPUT</text>
+
+              <!-- Baseline MTP-1 curve: rises then collapses -->
+              <path d="M 20 30 C 100 80, 180 140, 260 178 S 380 196, 460 200 S 530 200, 540 200" class="curve-bad" stroke="var(--warn)"></path>
+
+              <!-- DSpark curve: higher, flatter, climbs further right -->
+              <path d="M 20 18 C 80 30, 160 50, 260 60 S 380 70, 460 78 S 530 90, 540 96" class="curve" stroke="var(--accent)"></path>
+
+              <!-- SLA threshold line -->
+              <line x1="0" y1="60" x2="540" y2="60" stroke="var(--bad)" stroke-width="1" stroke-dasharray="2 4" opacity="0.5"></line>
+              <text x="540" y="56" text-anchor="end" class="legend-text" style="font-size:9.5px;fill:var(--bad)">120 TPS SLA</text>
+
+              <!-- Baseline fails SLA at this x -->
+              <circle cx="280" cy="178" r="9" style="fill:var(--warn);opacity:0.4"></circle>
+              <text x="280" y="200" text-anchor="middle" class="legend-text" style="font-size:10px;fill:var(--warn)">baseline dies</text>
+
+              <!-- DSpark point at same x -->
+              <circle cx="280" cy="60" r="6" style="fill:var(--accent)"></circle>
+              <text x="280" y="48" text-anchor="middle" class="legend-text" style="font-size:10px;fill:var(--accent)">DSpark @ SLA</text>
+
+              <!-- Endpoint labels -->
+              <g transform="translate(546, 30)">
+                <rect x="-2" y="-10" width="92" height="20" rx="4" style="fill:var(--bg);stroke:var(--accent)"></rect>
+                <text x="44" y="4" text-anchor="middle" class="legend-text" style="fill:var(--accent);font-size:10px">DSpark</text>
+              </g>
+              <g transform="translate(546, 184)">
+                <rect x="-2" y="-10" width="92" height="20" rx="4" style="fill:var(--bg);stroke:var(--warn)"></rect>
+                <text x="44" y="4" text-anchor="middle" class="legend-text" style="fill:var(--warn);font-size:10px">MTP-1</text>
+              </g>
+            </g>
+          </svg>
+        </div>
+        <p class="diagram-cap">The dashed SLA line is the part that matters: the baseline falls off a cliff once concurrency rises, DSpark stays above it.</p>
+        <div class="why">
+          <span class="why-label">WHY THIS MATTERS</span>
+          <b>The numbers in the abstract are fine. The structural change is what an SRE cares about. Once the throughput curve has a knee under contention, every SLA tier you tried to add after that knee is unreachable. Moving the knee right by trimming low-value verification is what unlocks "tiers that were previously unattainable" as the paper phrases it. The product change, not the metric change, is why DSpark shipped.</b>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- COMMON CONFUSIONS -->
+<section id="confusions">
+  <div class="wrap">
+    <span class="section-label">COMMON CONFUSIONS</span>
+    <h2>Four things people get wrong about this paper</h2>
+    <p class="lede">If you remember only the corrections, the page was worth opening.</p>
+
+    <div class="confusions">
+
+      <div class="conf">
+        <div class="num">CONFUSION 01</div>
+        <div class="q">"DSpark is just speculative decoding with a confidence threshold."</div>
+
+        <div class="a">No. A static threshold is rank-only: it picks which ones to verify, but it cannot tell you the optimum count under load. DSpark's formulation optimizes <code>&tau; &middot; SPS(B)</code> against the engine's batch-throughput curve, so the verification length changes from request to request and from cycle to cycle as load shifts. The threshold approach breaks the moment two requests have the same confidence but different expected acceptance lengths, which happens whenever the upstream tokens diverge.</div>
+      </div>
+
+      <div class="conf">
+        <div class="num">CONFUSION 02</div>
+        <div class="q">"The sequential head makes the drafter slower so the speedup is a wash."</div>
+
+        <div class="a">The whole design hinges on <code>T_sequential &lt;&lt; T_parallel</code>. The Markov head is a single low-rank logit bias per position, the RNN head is one gated linear unit per position. Both run as a short serial chain over already-computed hidden states, so the additional latency is well under 10% of total draft time. The gain comes from a restored suffix acceptance that raises &tau; far more than 10%, so the latency budget still wins. If your draft backbone is so tiny that <code>T_sequential</code> stops being negligible, this design stops being a win and you should go back to a pure AR drafter.</div>
+      </div>
+
+      <div class="conf">
+        <div class="num">CONFUSION 03</div>
+        <div class="q">"A retrospective global search would give higher throughput."</div>
+
+        <div class="a">It would, and that is exactly why you cannot do it. Speculative decoding's lossless property comes from a non-anticipating acceptance rule: the decision to admit or reject position <code>k</code> cannot depend on a token at position <code>k+1</code>. A retrospective scheduler that saw the full prefix survival distribution before cutting would leak future tokens into admission decisions and bias the output distribution away from the target. The early-stop in Algorithm 1 is what preserves the guarantee. The paper includes a counterexample in the appendix that shows exactly how a retrospective scheduler breaks exact target-distribution recovery.</div>
+      </div>
+
+      <div class="conf">
+        <div class="num">CONFUSION 04</div>
+        <div class="q">"Speculative decoding always helps, so the bigger the block the better."</div>
+
+        <div class="a">Once the block crosses the saturation length for the engine's current batch size, additional tokens cost more batch capacity than they return. The right block length is a function of <code>SPS(B)</code>, not of the drafter. Static long blocks are why a serving system looks fine in microbenchmarks and falls off a cliff in production. DSpark's win comes from treating verification length as a per-cycle, per-batch decision rather than a hyperparameter set at deploy time.</div>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- WHERE TO GO NEXT -->
+<section id="next">
+  <div class="wrap">
+    <span class="section-label">WHERE TO GO NEXT</span>
+    <h2>Three places to take this further</h2>
+    <p class="lede">Pick the one that matches where you are stuck.</p>
+
+    <div class="next-grid">
+      <div class="next">
+        <span class="tag">PAPER</span>
+        <div class="title">DSpark on arXiv</div>
+        <div class="desc">Read the full paper, especially Section 3.2.2 for the scheduler pseudocode and Appendix A for the lossless counterexample. The full text has the production deployment numbers and the SPS curve experiments.</div>
+        <a href="https://arxiv.org/abs/2607.05147" target="_blank" rel="noopener">arxiv.org/abs/2607.05147 &rarr;</a>
+      </div>
+      <div class="next">
+        <span class="tag">CODE</span>
+        <div class="title">DeepSpec training repo</div>
+        <div class="desc">DeepSeek open-sourced DSpark checkpoints plus DeepSpec, a training repository that also ships Eagle3 and DFlash. The cleanest way to see the sequential head, confidence head, and scheduler glued together in real PyTorch.</div>
+        <a href="https://github.com/deepseek-ai/DeepSpec" target="_blank" rel="noopener">github.com/deepseek-ai/DeepSpec &rarr;</a>
+      </div>
+      <div class="next">
+        <span class="tag">PRIMER</span>
+        <div class="title">Leviathan et al. 2023, the original</div>
+        <div class="desc">If you skipped the foundations, the original speculative decoding paper is short and worth a single sitting. It establishes the rejection-sampling acceptance rule DSpark inherits. The Day 1 explainer in this series covers the same ground in one paragraph plus one diagram.</div>
+        <a href="https://arxiv.org/abs/2211.17192" target="_blank" rel="noopener">arxiv.org/abs/2211.17192 &rarr;</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <p>Day 8 of the explainer series. Built by Hermes using the explainer-builder skill.</p>
+  </div>
+</footer>
+
+</body>
+</html>
