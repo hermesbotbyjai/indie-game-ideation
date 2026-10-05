@@ -1,0 +1,816 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Prefill Deflection (Kairos): Hermes Daily Explainer</title>
+<script>
+  // Pre-paint theme: read storage before stylesheet so first frame is correct.
+  (function () {
+    try {
+      var saved = localStorage.getItem('hermes-theme');
+      var prefers = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+      var t = saved || (prefers ? 'dark' : 'light');
+      document.documentElement.setAttribute('data-theme', t);
+    } catch (e) {}
+  })();
+</script>
+<style>
+  :root {
+    --bg: #ffffff;
+    --bg-soft: #fafafa;
+    --bg-elev: #f4f4f5;
+    --fg: #0d0d0d;
+    --fg-soft: #4a4a4a;
+    --fg-mute: #7a7a7a;
+    --border: rgba(13, 13, 13, 0.08);
+    --border-soft: rgba(13, 13, 13, 0.05);
+    --accent: #18E299;
+    --accent-soft: rgba(24, 226, 153, 0.10);
+    --accent-ring: rgba(24, 226, 153, 0.35);
+    --code-bg: #f4f4f5;
+    --shadow: 0 1px 2px rgba(13, 13, 13, 0.04), 0 4px 16px rgba(13, 13, 13, 0.05);
+    --grad-hero: radial-gradient(ellipse 80% 60% at 50% 0%, rgba(24, 226, 153, 0.10), transparent 60%);
+    --warn: #f59e0b;
+    --warn-soft: rgba(245, 158, 11, 0.10);
+    --cool: #3b82f6;
+    --cool-soft: rgba(59, 130, 246, 0.10);
+    --bad: #ef4444;
+    --bad-soft: rgba(239, 68, 68, 0.10);
+  }
+  html[data-theme="dark"] {
+    --bg: #0a0a0a;
+    --bg-soft: #0f0f10;
+    --bg-elev: #16161a;
+    --fg: #f5f5f5;
+    --fg-soft: #c2c2c8;
+    --fg-mute: #8a8a92;
+    --border: rgba(255, 255, 255, 0.10);
+    --border-soft: rgba(255, 255, 255, 0.05);
+    --accent: #2af5a8;
+    --accent-soft: rgba(42, 245, 168, 0.12);
+    --accent-ring: rgba(42, 245, 168, 0.40);
+    --code-bg: #16161a;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 4px 16px rgba(0, 0, 0, 0.5);
+    --grad-hero: radial-gradient(ellipse 80% 60% at 50% 0%, rgba(42, 245, 168, 0.14), transparent 60%);
+    --warn-soft: rgba(245, 158, 11, 0.14);
+    --cool-soft: rgba(59, 130, 246, 0.14);
+    --bad-soft: rgba(239, 68, 68, 0.14);
+  }
+  @media (prefers-color-scheme: dark) {
+    html:not([data-theme="light"]) {
+      --bg: #0a0a0a;
+      --bg-soft: #0f0f10;
+      --bg-elev: #16161a;
+      --fg: #f5f5f5;
+      --fg-soft: #c2c2c8;
+      --fg-mute: #8a8a92;
+      --border: rgba(255, 255, 255, 0.10);
+      --border-soft: rgba(255, 255, 255, 0.05);
+      --accent: #2af5a8;
+      --accent-soft: rgba(42, 245, 168, 0.12);
+      --accent-ring: rgba(42, 245, 168, 0.40);
+      --code-bg: #16161a;
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 4px 16px rgba(0, 0, 0, 0.5);
+      --grad-hero: radial-gradient(ellipse 80% 60% at 50% 0%, rgba(42, 245, 168, 0.14), transparent 60%);
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--fg); overflow-x: hidden; }
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: 17px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  .mono { font-family: 'Geist Mono', 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace; }
+  a { color: var(--fg); text-decoration: none; border-bottom: 1px solid var(--accent-ring); }
+  a:hover { color: var(--accent); border-bottom-color: var(--accent); }
+  code { font-family: 'Geist Mono', monospace; font-size: 0.92em; background: var(--code-bg); padding: 2px 6px; }
+  pre { font-family: 'Geist Mono', monospace; background: var(--code-bg); padding: 16px 18px; border-radius: 10px; border: 1px solid var(--border); overflow-x: auto; font-size: 14px; line-height: 1.55; }
+
+  /* Layout */
+  .nav {
+    position: sticky; top: 0; z-index: 50;
+    backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+    background: color-mix(in oklab, var(--bg) 85%, transparent);
+    border-bottom: 1px solid var(--border-soft);
+  }
+  .nav-inner { max-width: 1200px; margin: 0 auto; padding: 14px 24px; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+  .brand { font-weight: 600; letter-spacing: -0.01em; display: flex; align-items: center; gap: 10px; }
+  .brand-mark { width: 22px; height: 22px; border-radius: 6px; background: var(--accent); display: inline-block; }
+  .nav-links { display: flex; align-items: center; gap: 18px; font-size: 14px; color: var(--fg-soft); }
+  .nav-links a { border-bottom: none; }
+  @media (max-width: 540px) {
+    .nav-links a:not(:last-of-type) { display: none; }
+  }
+  .theme-toggle {
+    background: transparent; border: 1px solid var(--border); border-radius: 9999px;
+    width: 36px; height: 36px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+    color: var(--fg-soft);
+  }
+  .theme-toggle:hover { color: var(--accent); border-color: var(--accent-ring); }
+
+  .wrap { max-width: 1200px; margin: 0 auto; padding: 0 24px; }
+
+  /* Hero */
+  .hero { padding: 80px 0 56px; background: var(--grad-hero); border-bottom: 1px solid var(--border-soft); }
+  .label {
+    display: inline-block; font-family: 'Geist Mono', monospace; font-size: 11px; letter-spacing: 0.18em;
+    text-transform: uppercase; color: var(--fg-soft); background: var(--bg-elev);
+    padding: 6px 12px; border-radius: 9999px; border: 1px solid var(--border-soft);
+  }
+  .h1 { font-size: 64px; line-height: 1.05; letter-spacing: -0.02em; font-weight: 600; margin: 22px 0 18px; max-width: 18ch; }
+  .tagline { font-size: 19px; color: var(--fg-soft); max-width: 56ch; margin: 0 0 28px; }
+  .hero-list { display: flex; flex-wrap: wrap; gap: 10px 18px; margin: 0; padding: 0; list-style: none; }
+  .hero-list li { font-size: 14px; color: var(--fg-soft); display: inline-flex; align-items: center; gap: 8px; }
+  .hero-list li::before {
+    content: ""; width: 6px; height: 6px; border-radius: 9999px; background: var(--accent); display: inline-block;
+  }
+  @media (max-width: 640px) {
+    .h1 { font-size: 44px; }
+    .hero { padding: 56px 0 40px; }
+  }
+
+  /* Sections */
+  section { padding: 72px 0; border-bottom: 1px solid var(--border-soft); }
+  section:last-of-type { border-bottom: none; }
+  .h2 { font-size: 40px; line-height: 1.1; letter-spacing: -0.02em; font-weight: 600; margin: 0 0 14px; max-width: 22ch; }
+  .lede { font-size: 18px; color: var(--fg-soft); max-width: 64ch; margin: 0 0 36px; }
+  @media (max-width: 640px) { .h2 { font-size: 32px; } }
+
+  /* One-sentence callout */
+  .one-model {
+    border: 1px solid var(--border); border-left: 3px solid var(--accent);
+    background: var(--bg-soft); border-radius: 12px; padding: 28px 28px; margin: 0 0 8px;
+    max-width: 80ch;
+  }
+  .one-model .label { margin-bottom: 10px; }
+  .one-model p { font-size: 19px; line-height: 1.55; margin: 0; color: var(--fg); }
+  .one-model code { font-size: 0.95em; }
+
+  /* Mental model */
+  .hero-diagram {
+    max-width: 720px; margin: 16px auto 0; width: 100%;
+  }
+  .hero-diagram svg { width: 100%; height: auto; display: block; }
+
+  /* Walkthrough */
+  .wt { display: grid; grid-template-columns: 1.4fr 1fr; gap: 48px; align-items: start; margin-top: 28px; }
+  .wt-text p { margin: 0 0 14px; }
+  .wt-text p:last-child { margin-bottom: 0; }
+  .wt-aside {
+    background: var(--bg-soft); border: 1px solid var(--border-soft);
+    border-left: 3px solid var(--accent); border-radius: 10px; padding: 18px 20px; font-size: 14.5px;
+  }
+  .wt-aside .label { margin-bottom: 8px; }
+  .wt-aside p { margin: 0; color: var(--fg-soft); }
+  .wt-diagram { grid-column: 1 / -1; max-width: 760px; margin: 8px auto 0; }
+  .wt-diagram svg { width: 100%; height: auto; display: block; }
+  @media (max-width: 880px) {
+    .wt { grid-template-columns: 1fr; gap: 24px; }
+  }
+
+  /* Confusions */
+  .conf-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-top: 24px; }
+  .conf {
+    border: 1px solid var(--border); border-radius: 12px; padding: 22px 22px;
+    background: var(--bg);
+  }
+  .conf-num {
+    font-family: 'Geist Mono', monospace; font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase;
+    color: var(--bad); display: inline-block; margin-bottom: 8px;
+  }
+  .conf-q { font-weight: 600; font-size: 17px; margin: 0 0 10px; line-height: 1.35; }
+  .conf-a { font-size: 15.5px; color: var(--fg-soft); margin: 0; line-height: 1.55; }
+  .conf-a code { font-size: 0.9em; }
+  @media (max-width: 720px) { .conf-grid { grid-template-columns: 1fr; } }
+
+  /* Where to go next */
+  .links { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; margin-top: 24px; }
+  .link-card {
+    border: 1px solid var(--border); border-radius: 12px; padding: 20px 20px;
+    background: var(--bg); display: block;
+  }
+  .link-card:hover { border-color: var(--accent-ring); }
+  .link-card .label { margin-bottom: 10px; }
+  .link-card .link-title { font-weight: 600; font-size: 16px; margin: 0 0 6px; line-height: 1.35; }
+  .link-card .link-desc { font-size: 14px; color: var(--fg-soft); margin: 8px 0 0; line-height: 1.5; }
+  .link-icon { width: 100%; max-width: 220px; height: auto; display: block; margin: 4px 0 6px; }
+  .conf-icon { width: 56px; height: 56px; display: block; margin: 0 0 10px; }
+  @media (max-width: 880px) { .links { grid-template-columns: 1fr; } }
+
+  /* Footer */
+  footer { padding: 48px 0 56px; color: var(--fg-mute); font-size: 14px; border-top: 1px solid var(--border-soft); }
+  footer .mono { font-size: 12.5px; }
+
+  /* Utilities */
+  .accent { color: var(--accent); }
+  .muted { color: var(--fg-mute); }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; }
+  }
+
+  /* Entrance + decorative keyframes */
+  @keyframes fadeUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+  @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes pulseSoft { 0%, 100% { opacity: 0.55; } 50% { opacity: 1; } }
+  @keyframes drawIn { from { stroke-dashoffset: 240; } to { stroke-dashoffset: 0; } }
+  @keyframes slideRight { from { transform: translateX(-12px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+  @keyframes slideLeft { from { transform: translateX(12px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+  @keyframes glow { 0%, 100% { filter: drop-shadow(0 0 0 transparent); } 50% { filter: drop-shadow(0 0 6px var(--accent-ring)); } }
+  @keyframes blink { 0%, 50% { opacity: 1; } 51%, 100% { opacity: 0.25; } }
+  @keyframes countUp { from { transform: scale(0.85); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+  .anim-fade { animation: fadeUp 600ms ease-out both; }
+  .anim-fade-d1 { animation: fadeUp 600ms ease-out 100ms both; }
+  .anim-fade-d2 { animation: fadeUp 600ms ease-out 220ms both; }
+  .anim-pulse { animation: pulseSoft 2.4s ease-in-out infinite; }
+  .anim-glow { animation: glow 3s ease-in-out infinite; }
+</style>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" />
+</head>
+<body>
+
+<nav class="nav">
+  <div class="nav-inner">
+    <div class="brand"><span class="brand-mark"></span><span>Hermes</span><span class="mono muted" style="font-size:12px;letter-spacing:0.1em;">/ DAILY EXPLAINER</span></div>
+    <div class="nav-links">
+      <a href="#model">Model</a>
+      <a href="#diagram">Diagram</a>
+      <a href="#walk">Walkthrough</a>
+      <a href="#confuse">Confusions</a>
+      <a href="#next">Next</a>
+      <button class="theme-toggle" id="theme-toggle" aria-label="Toggle theme">
+        <svg id="theme-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+      </button>
+    </div>
+  </div>
+</nav>
+
+<!-- HERO -->
+<header class="hero">
+  <div class="wrap">
+    <span class="label">Day 9 of the daily explainer series</span>
+    <h1 class="h1">Prefill Deflection: when a decode node steals prefill work.</h1>
+    <p class="tagline">In a disaggregated LLM serving stack, the bottleneck is rarely prefill compute. It is the queue and the KV-cache transfer. Kairos lets a decode node do both jobs at once, on its own terms, only when it pays off.</p>
+    <ul class="hero-list">
+      <li>Why prefill compute is only 2 to 23 percent of P95 TTFT</li>
+      <li>How a decode node has room to host prefill chunks</li>
+      <li>The TBT-safe chunk sweep that makes deflection safe</li>
+      <li>How the paper got 81 percent P95 TTFT cuts on a 2P2D cluster</li>
+    </ul>
+  </div>
+</header>
+
+<!-- MODEL IN ONE SENTENCE -->
+<section id="model">
+  <div class="wrap">
+    <span class="label">The model in one sentence</span>
+    <div class="one-model" style="margin-top:18px;">
+      <p>Kairos picks the prefill phase of a request up off a saturated prefill node, runs it on a decode node as small chunked-prefill steps that share the decoder's batch, and only when the predicted new TTFT is below the old one and no in-flight decoder's Time-Between-Tokens breaks its SLO.</p>
+    </div>
+  </div>
+</section>
+
+<!-- MENTAL MODEL DIAGRAM -->
+<section id="diagram">
+  <div class="wrap">
+    <span class="label">The mental model</span>
+    <h2 class="h2" style="margin-top:18px;">Two pools, one asymmetric bottleneck, one rerouting knob.</h2>
+    <p class="lede">The diagram below is the load-bearing picture. Watch where the traffic goes under burst, and where the idle SMs sit. The whole rest of the explainer is details on this sketch.</p>
+
+    <div class="hero-diagram">
+      <svg viewBox="0 0 720 360" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Disaggregated LLM serving with prefill pool saturated, decode pool underutilized, and a deflection path from the dispatcher to a decode node.">
+        <defs>
+          <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" style="fill:var(--fg-soft)" />
+          </marker>
+          <marker id="arrA" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" style="fill:var(--accent)" />
+          </marker>
+        </defs>
+
+        <!-- Dispatcher -->
+        <rect x="300" y="14" width="120" height="40" rx="8" style="fill:var(--bg-elev);stroke:var(--border)" />
+        <text x="360" y="39" text-anchor="middle" font-family="Inter,sans-serif" font-size="13" font-weight="600" style="fill:var(--fg)">Dispatcher</text>
+
+        <!-- Prefill pool -->
+        <rect x="40" y="100" width="220" height="180" rx="12" style="fill:var(--bad-soft);stroke:var(--bad)" />
+        <text x="150" y="124" text-anchor="middle" font-family="Geist Mono,monospace" font-size="10" letter-spacing="0.16em" style="fill:var(--bad)">PREFILL POOL</text>
+        <text x="150" y="142" text-anchor="middle" font-family="Inter,sans-serif" font-size="12" style="fill:var(--fg-soft)">compute-bound, 75-84% SM</text>
+
+        <!-- 2 prefill nodes -->
+        <rect x="58" y="158" width="84" height="50" rx="6" style="fill:var(--bg);stroke:var(--border)" />
+        <text x="100" y="180" text-anchor="middle" font-family="Inter,sans-serif" font-size="12" style="fill:var(--fg)">prefill-0</text>
+        <text x="100" y="196" text-anchor="middle" font-family="Geist Mono,monospace" font-size="10" style="fill:var(--bad)">queue: 840 ms</text>
+
+        <rect x="158" y="158" width="84" height="50" rx="6" style="fill:var(--bg);stroke:var(--border)" />
+        <text x="200" y="180" text-anchor="middle" font-family="Inter,sans-serif" font-size="12" style="fill:var(--fg)">prefill-1</text>
+        <text x="200" y="196" text-anchor="middle" font-family="Geist Mono,monospace" font-size="10" style="fill:var(--bad)">queue: 612 ms</text>
+
+        <!-- queue pills under prefill nodes -->
+        <g>
+          <rect x="60" y="220" width="180" height="12" rx="6" style="fill:var(--bad-soft)" />
+          <rect x="60" y="220" width="160" height="12" rx="6" style="fill:var(--bad)">
+            <animate attributeName="width" values="80;180;110;160;80" dur="6s" repeatCount="indefinite" />
+          </rect>
+        </g>
+        <text x="150" y="252" text-anchor="middle" font-family="Inter,sans-serif" font-size="11" style="fill:var(--fg-mute)">arrival bursts pile here</text>
+
+        <!-- KV transfer between pools -->
+        <line x1="260" y1="183" x2="430" y2="183" style="stroke:var(--fg-mute);stroke-width:1.5;stroke-dasharray:4 3" marker-end="url(#arr)" />
+        <text x="345" y="176" text-anchor="middle" font-family="Geist Mono,monospace" font-size="10" style="fill:var(--fg-mute)">KV transfer: 2.1 s at P95</text>
+
+        <!-- Decode pool -->
+        <rect x="430" y="100" width="250" height="180" rx="12" style="fill:var(--accent-soft);stroke:var(--accent)" />
+        <text x="555" y="124" text-anchor="middle" font-family="Geist Mono,monospace" font-size="10" letter-spacing="0.16em" style="fill:var(--accent)">DECODE POOL</text>
+        <text x="555" y="142" text-anchor="middle" font-family="Inter,sans-serif" font-size="12" style="fill:var(--fg-soft)">memory-bound, 12-27% SM</text>
+
+        <!-- 2 decode nodes -->
+        <rect x="448" y="158" width="100" height="50" rx="6" style="fill:var(--bg);stroke:var(--border)" />
+        <text x="498" y="178" text-anchor="middle" font-family="Inter,sans-serif" font-size="12" style="fill:var(--fg)">decode-0</text>
+        <text x="498" y="194" text-anchor="middle" font-family="Geist Mono,monospace" font-size="10" style="fill:var(--accent)">idle SM headroom</text>
+
+        <rect x="562" y="158" width="100" height="50" rx="6" style="fill:var(--bg);stroke:var(--border)" />
+        <text x="612" y="178" text-anchor="middle" font-family="Inter,sans-serif" font-size="12" style="fill:var(--fg)">decode-1</text>
+        <text x="612" y="194" text-anchor="middle" font-family="Geist Mono,monospace" font-size="10" style="fill:var(--accent)">idle SM headroom</text>
+
+        <!-- Spare SM bar -->
+        <g>
+          <rect x="450" y="220" width="210" height="12" rx="6" style="fill:var(--bg-elev)" />
+          <rect x="450" y="220" width="150" height="12" rx="6" style="fill:var(--accent)">
+            <animate attributeName="width" values="120;200;130;180;120" dur="5s" repeatCount="indefinite" />
+          </rect>
+        </g>
+        <text x="555" y="252" text-anchor="middle" font-family="Inter,sans-serif" font-size="11" style="fill:var(--fg-mute)">70%+ SMs are sitting idle</text>
+
+        <!-- Normal prefill path: dispatcher to prefill -->
+        <line x1="320" y1="55" x2="120" y2="155" style="stroke:var(--fg-soft);stroke-width:1.5" marker-end="url(#arr)" />
+        <text x="195" y="98" font-family="Geist Mono,monospace" font-size="10" style="fill:var(--fg-soft)">normal: to prefill</text>
+
+        <!-- Deflection path: dispatcher to decode (accent) -->
+        <line x1="420" y1="55" x2="555" y2="155" style="stroke:var(--accent);stroke-width:2" marker-end="url(#arrA)" />
+        <text x="500" y="98" font-family="Geist Mono,monospace" font-size="10" style="fill:var(--accent)">deflect: to decode</text>
+
+        <!-- Token highlights: small chunks flowing into decode-0 -->
+        <g>
+          <rect x="458" y="222" width="6" height="6" rx="1" style="fill:var(--bg)" />
+          <rect x="468" y="222" width="6" height="6" rx="1" style="fill:var(--bg)" />
+          <rect x="478" y="222" width="6" height="6" rx="1" style="fill:var(--bg)" />
+          <rect x="488" y="222" width="6" height="6" rx="1" style="fill:var(--bg)" />
+          <rect x="498" y="222" width="6" height="6" rx="1" style="fill:var(--bg)" />
+        </g>
+
+        <!-- Bottom caption -->
+        <text x="360" y="320" text-anchor="middle" font-family="Inter,sans-serif" font-size="13" style="fill:var(--fg-soft)">P95 TTFT breakdown under burst: 2-23% prefill compute, the rest is queue plus KV transfer.</text>
+        <text x="360" y="340" text-anchor="middle" font-family="Geist Mono,monospace" font-size="11" style="fill:var(--fg-mute)">Kairos 2026, Microsoft, arXiv 2607.02043</text>
+      </svg>
+    </div>
+  </div>
+</section>
+
+<!-- WALKTHROUGH -->
+<section id="walk">
+  <div class="wrap">
+    <span class="label">The walkthrough</span>
+    <h2 class="h2" style="margin-top:18px;">Four ideas, each with one paragraph, one diagram, one reason it matters.</h2>
+
+    <!-- 1. The asymmetry -->
+    <div class="wt" style="margin-top:36px;">
+      <div class="wt-text">
+        <p><strong>Disaggregation created a new asymmetry, it did not fix the old one.</strong> A modern serving stack runs two separate GPU pools: a prefill pool for prompt processing, a decode pool for token generation. The prefill node produces the KV cache and ships it across the network to the decode node, which then generates the response one token at a time.[1][3] The headline idea is that prefill is compute-bound and decode is memory-bandwidth-bound, so each phase gets the hardware that suits it.</p>
+        <p>The trouble is that under bursty, heavy-tailed prompt distributions, the prefill node becomes the bottleneck and decode nodes sit mostly idle. The Microsoft team measured a 2P2D A100 cluster across five production-style traces: prefill SM utilization was 75 to 84 percent, decode SM utilization was 12 to 27 percent. The two pools are not symmetric, the spare capacity lives on the wrong side of the wire.</p>
+      </div>
+      <aside class="wt-aside">
+        <span class="label">Why this matters</span>
+        <p>If you are sizing clusters, the prefill pool is the one that grows first and hurts first. Adding more decode nodes does not help, because the request never reaches them. This is the core tension Kairos tries to relax.</p>
+      </aside>
+    </div>
+
+    <div class="wt-diagram">
+      <svg viewBox="0 0 760 220" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Two paired bar charts comparing prefill vs decode SM utilization across five workloads.">
+        <text x="20" y="24" font-family="Inter,sans-serif" font-size="13" font-weight="600" style="fill:var(--fg)">SM utilization by workload</text>
+        <text x="20" y="42" font-family="Geist Mono,monospace" font-size="10" style="fill:var(--fg-mute)">prefill 75-84% vs decode 12-27%</text>
+
+        <!-- Chart area -->
+        <g transform="translate(20,60)">
+          <line x1="0" y1="120" x2="720" y2="120" style="stroke:var(--border)" />
+          <line x1="0" y1="0" x2="0" y2="120" style="stroke:var(--border)" />
+
+          <!-- Five workload groups: 5 workloads x 2 bars (prefill / decode) -->
+          <g font-family="Geist Mono,monospace" font-size="9" style="fill:var(--fg-mute)">
+            <text x="55" y="138" text-anchor="middle">LPLD</text>
+            <text x="190" y="138" text-anchor="middle">LPHD</text>
+            <text x="325" y="138" text-anchor="middle">HPLD</text>
+            <text x="460" y="138" text-anchor="middle">HPHD</text>
+            <text x="595" y="138" text-anchor="middle">BURST</text>
+          </g>
+
+          <!-- bars: prefill 75-84, decode 12-27. Width 22 each, gap 8 -->
+          <!-- LPLD: p=76, d=18 -->
+          <rect x="30" y="28.8" width="22" height="91.2" rx="3" style="fill:var(--bad)" />
+          <text x="41" y="22" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" style="fill:var(--fg-soft)">76%</text>
+          <rect x="60" y="98.4" width="22" height="21.6" rx="3" style="fill:var(--accent)" />
+          <text x="71" y="92" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" style="fill:var(--fg-soft)">18%</text>
+
+          <!-- LPHD: p=75, d=20 -->
+          <rect x="165" y="30" width="22" height="90" rx="3" style="fill:var(--bad)" />
+          <text x="176" y="24" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" style="fill:var(--fg-soft)">75%</text>
+          <rect x="195" y="96" width="22" height="24" rx="3" style="fill:var(--accent)" />
+          <text x="206" y="90" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" style="fill:var(--fg-soft)">20%</text>
+
+          <!-- HPLD: p=83, d=22 -->
+          <rect x="300" y="20.4" width="22" height="99.6" rx="3" style="fill:var(--bad)" />
+          <text x="311" y="14" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" style="fill:var(--fg-soft)">83%</text>
+          <rect x="330" y="93.6" width="22" height="26.4" rx="3" style="fill:var(--accent)" />
+          <text x="341" y="88" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" style="fill:var(--fg-soft)">22%</text>
+
+          <!-- HPHD: p=84, d=24 -->
+          <rect x="435" y="19.2" width="22" height="100.8" rx="3" style="fill:var(--bad)" />
+          <text x="446" y="13" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" style="fill:var(--fg-soft)">84%</text>
+          <rect x="465" y="91.2" width="22" height="28.8" rx="3" style="fill:var(--accent)" />
+          <text x="476" y="85" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" style="fill:var(--fg-soft)">24%</text>
+
+          <!-- BURST: p=82, d=27 -->
+          <rect x="570" y="21.6" width="22" height="98.4" rx="3" style="fill:var(--bad)" />
+          <text x="581" y="16" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" style="fill:var(--fg-soft)">82%</text>
+          <rect x="600" y="87.6" width="22" height="32.4" rx="3" style="fill:var(--accent)" />
+          <text x="611" y="82" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" style="fill:var(--fg-soft)">27%</text>
+
+          <!-- legend -->
+          <g transform="translate(0,160)">
+            <rect x="0" y="0" width="10" height="10" rx="2" style="fill:var(--bad)" />
+            <text x="16" y="9" font-family="Inter,sans-serif" font-size="11" style="fill:var(--fg-soft)">prefill SM</text>
+            <rect x="100" y="0" width="10" height="10" rx="2" style="fill:var(--accent)" />
+            <text x="116" y="9" font-family="Inter,sans-serif" font-size="11" style="fill:var(--fg-soft)">decode SM</text>
+          </g>
+        </g>
+      </svg>
+    </div>
+
+    <!-- 2. Where the TTFT actually goes -->
+    <div class="wt" style="margin-top:48px;">
+      <div class="wt-text">
+        <p><strong>P95 TTFT is not bottlenecked on prefill compute, it is bottlenecked on queue plus KV transfer.</strong> Across all five traces the authors ran, actual prefill execution time was only 2 to 23 percent of P95 Time-to-First-Token. The remaining 77 to 98 percent was prefill queue wait, plus the inter-node GPU-to-GPU KV cache transfer that has to happen before the first decode step can start.[1] Under bursty arrival, the queue can spike to 840 ms and the KV transfer to 2.1 seconds at P95.</p>
+        <p>So the obvious lever is not "make prefill faster." The compute is fine. The lever is "let prefill happen somewhere that already has KV transfer built in." That is a decode node, which already owns the request's KV cache once generation starts. If the prefill of a new request is run in place on a decode node, the transfer step vanishes.</p>
+      </div>
+      <aside class="wt-aside">
+        <span class="label">Why this matters</span>
+        <p>Most inference engineering focuses on prefill kernel speed, KV cache layout, or tokenizer latency. Those are 2 to 23 percent of the problem. The real cost is the scheduling fabric between the two phases. Any time spent shaving a millisecond off the GEMM is invisible if the request is sitting in a 2-second queue.</p>
+      </aside>
+    </div>
+
+    <div class="wt-diagram">
+      <svg viewBox="0 0 760 200" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Stacked bar of P95 TTFT breakdown: prefill compute 2 to 23 percent, queue plus KV transfer 77 to 98 percent.">
+        <text x="20" y="24" font-family="Inter,sans-serif" font-size="13" font-weight="600" style="fill:var(--fg)">P95 TTFT breakdown under burst</text>
+
+        <!-- left bar: a typical P95 TTFT pile -->
+        <g transform="translate(60,50)">
+          <rect x="0" y="0" width="120" height="120" rx="6" style="fill:var(--bg-elev);stroke:var(--border)" />
+          <!-- prefill compute: 12% of 120 = 14.4 -->
+          <rect x="0" y="105.6" width="120" height="14.4" rx="2" style="fill:var(--bad)">
+            <animate attributeName="height" values="10;18;10" dur="4s" repeatCount="indefinite" />
+            <animate attributeName="y" values="110;102;110" dur="4s" repeatCount="indefinite" />
+          </rect>
+          <text x="60" y="170" text-anchor="middle" font-family="Geist Mono,monospace" font-size="10" style="fill:var(--fg-mute)">prefill compute</text>
+          <text x="60" y="184" text-anchor="middle" font-family="Inter,sans-serif" font-size="11" style="fill:var(--bad)">2-23%</text>
+
+          <!-- queue: 50% = 60 -->
+          <rect x="0" y="45.6" width="120" height="60" rx="0" style="fill:var(--warn)">
+            <animate attributeName="height" values="50;70;50" dur="4s" repeatCount="indefinite" />
+            <animate attributeName="y" values="55;35;55" dur="4s" repeatCount="indefinite" />
+          </rect>
+          <text x="60" y="80" text-anchor="middle" font-family="Inter,sans-serif" font-size="11" font-weight="600" style="fill:var(--bg)">queue wait</text>
+
+          <!-- KV transfer: 38% = 45.6 -->
+          <rect x="0" y="0" width="120" height="45.6" rx="0" style="fill:var(--fg-soft)">
+            <animate attributeName="height" values="35;55;35" dur="4s" repeatCount="indefinite" />
+          </rect>
+          <text x="60" y="28" text-anchor="middle" font-family="Inter,sans-serif" font-size="11" font-weight="600" style="fill:var(--bg)">KV transfer</text>
+        </g>
+
+        <!-- arrow + caption -->
+        <g transform="translate(220,90)">
+          <line x1="0" y1="20" x2="80" y2="20" style="stroke:var(--accent);stroke-width:2" marker-end="url(#arrA)" />
+          <text x="40" y="10" text-anchor="middle" font-family="Geist Mono,monospace" font-size="10" style="fill:var(--accent)">deflect</text>
+        </g>
+
+        <!-- right bar: deflected path -->
+        <g transform="translate(330,50)">
+          <rect x="0" y="0" width="120" height="120" rx="6" style="fill:var(--bg-elev);stroke:var(--border)" />
+          <!-- queue grows small, transfer gone, only prefill compute remains at similar fraction -->
+          <rect x="0" y="100" width="120" height="20" rx="2" style="fill:var(--bad)" />
+          <text x="60" y="170" text-anchor="middle" font-family="Geist Mono,monospace" font-size="10" style="fill:var(--fg-mute)">chunked prefill</text>
+          <text x="60" y="184" text-anchor="middle" font-family="Inter,sans-serif" font-size="11" style="fill:var(--bad)">on decode node</text>
+
+          <rect x="0" y="80" width="120" height="20" rx="0" style="fill:var(--warn)" />
+          <text x="60" y="94" text-anchor="middle" font-family="Inter,sans-serif" font-size="10" font-weight="600" style="fill:var(--bg)">small queue</text>
+
+          <rect x="0" y="0" width="120" height="80" rx="3" style="fill:var(--accent);opacity:0.85" />
+          <text x="60" y="44" text-anchor="middle" font-family="Inter,sans-serif" font-size="12" font-weight="600" style="fill:var(--bg)">time saved</text>
+        </g>
+
+        <text x="520" y="80" font-family="Inter,sans-serif" font-size="13" style="fill:var(--fg-soft)">P95 TTFT cut</text>
+        <text x="520" y="100" font-family="Inter,sans-serif" font-size="22" font-weight="600" style="fill:var(--accent)">up to 81%</text>
+        <text x="520" y="118" font-family="Inter,sans-serif" font-size="11" style="fill:var(--fg-mute)">on production-style 2P2D trace</text>
+      </svg>
+    </div>
+
+    <!-- 3. TBT-safe chunk sweep -->
+    <div class="wt" style="margin-top:48px;">
+      <div class="wt-text">
+        <p><strong>Deflection only works if it does not break the in-flight decoders, and that is the whole game.</strong> Kairos is not "always deflect, hope for the best." For every queued request, the dispatcher first estimates its TTFT on the prefill node as the queue wait plus the prefill compute. Then, for every decode node, it sweeps over candidate chunk size sequences and asks two questions. Question one: would adding this chunked prefill to the decode node's batch push any in-flight decoder's Time-Between-Tokens past its SLO? Question two: is the projected TTFT on the decode node less than alpha times the projected TTFT on the prefill node?[1] Only if both pass does Kairos deflect.</p>
+        <p>The chunk size matters. The paper's profiling shows that for chunk sizes up to 512 tokens, adding a prefill chunk to a decode batch increases the decode step latency by at most 30 ms across the tested workloads. Above that, the step latency can grow enough to break TBT. The dispatcher's job is to find the largest safe chunk that still wins on TTFT, and run that. The per-request decision takes under 1 millisecond, so the dispatch loop itself is not the bottleneck.[1]</p>
+      </div>
+      <aside class="wt-aside">
+        <span class="label">Why this matters</span>
+        <p>The reason "just co-locate prefill and decode" sounds free is that you skip the KV transfer. The reason nobody does it that way is that co-location breaks TBT under burst. Kairos gets the best of both by borrowing prefill work in small, schedule-checked slices. That is also why the safety check, not the routing trick, is the load-bearing piece.</p>
+      </aside>
+    </div>
+
+    <div class="wt-diagram">
+      <svg viewBox="0 0 760 240" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Decode step timeline with interleaved prefill chunks and a TBT safety threshold.">
+        <text x="20" y="24" font-family="Inter,sans-serif" font-size="13" font-weight="600" style="fill:var(--fg)">Per-step schedule on a deflecting decode node</text>
+        <text x="20" y="42" font-family="Geist Mono,monospace" font-size="10" style="fill:var(--fg-mute)">TBT SLO: 50 ms   current step: 18-22 ms   safety budget: 28-32 ms</text>
+
+        <!-- Timeline base -->
+        <line x1="40" y1="130" x2="720" y2="130" style="stroke:var(--border)" />
+        <g font-family="Geist Mono,monospace" font-size="9" style="fill:var(--fg-mute)">
+          <line x1="40" y1="125" x2="40" y2="135" style="stroke:var(--fg-mute)" />
+          <line x1="160" y1="125" x2="160" y2="135" style="stroke:var(--fg-mute)" />
+          <line x1="280" y1="125" x2="280" y2="135" style="stroke:var(--fg-mute)" />
+          <line x1="400" y1="125" x2="400" y2="135" style="stroke:var(--fg-mute)" />
+          <line x1="520" y1="125" x2="520" y2="135" style="stroke:var(--fg-mute)" />
+          <line x1="640" y1="125" x2="640" y2="135" style="stroke:var(--fg-mute)" />
+          <text x="40" y="150" text-anchor="middle">t=0</text>
+          <text x="160" y="150" text-anchor="middle">t=1</text>
+          <text x="280" y="150" text-anchor="middle">t=2</text>
+          <text x="400" y="150" text-anchor="middle">t=3</text>
+          <text x="520" y="150" text-anchor="middle">t=4</text>
+          <text x="640" y="150" text-anchor="middle">t=5</text>
+        </g>
+
+        <!-- decode steps (short green blocks) -->
+        <g>
+          <rect x="44" y="110" width="110" height="20" rx="3" style="fill:var(--accent)" />
+          <text x="99" y="124" text-anchor="middle" font-family="Inter,sans-serif" font-size="10" style="fill:var(--bg)">decode</text>
+
+          <rect x="284" y="110" width="110" height="20" rx="3" style="fill:var(--accent)" />
+          <text x="339" y="124" text-anchor="middle" font-family="Inter,sans-serif" font-size="10" style="fill:var(--bg)">decode</text>
+
+          <rect x="524" y="110" width="110" height="20" rx="3" style="fill:var(--accent)" />
+          <text x="579" y="124" text-anchor="middle" font-family="Inter,sans-serif" font-size="10" style="fill:var(--bg)">decode</text>
+        </g>
+
+        <!-- prefill chunks (small accent-tinted blocks above timeline) -->
+        <g>
+          <rect x="160" y="86" width="50" height="24" rx="3" style="fill:var(--accent-soft);stroke:var(--accent)" />
+          <text x="185" y="103" text-anchor="middle" font-family="Geist Mono,monospace" font-size="10" style="fill:var(--accent)">chunk</text>
+          <text x="185" y="78" text-anchor="middle" font-family="Geist Mono,monospace" font-size="9" style="fill:var(--fg-mute)">128</text>
+
+          <rect x="400" y="86" width="50" height="24" rx="3" style="fill:var(--accent-soft);stroke:var(--accent)" />
+          <text x="425" y="103" text-anchor="middle" font-family="Geist Mono,monospace" font-size="10" style="fill:var(--accent)">chunk</text>
+          <text x="425" y="78" text-anchor="middle" font-family="Geist Mono,monospace" font-size="9" style="fill:var(--fg-mute)">128</text>
+
+          <rect x="640" y="86" width="50" height="24" rx="3" style="fill:var(--accent-soft);stroke:var(--accent)" />
+          <text x="665" y="103" text-anchor="middle" font-family="Geist Mono,monospace" font-size="10" style="fill:var(--accent)">chunk</text>
+          <text x="665" y="78" text-anchor="middle" font-family="Geist Mono,monospace" font-size="9" style="fill:var(--fg-mute)">128</text>
+        </g>
+
+        <!-- safety threshold -->
+        <line x1="40" y1="70" x2="720" y2="70" style="stroke:var(--bad);stroke-width:1;stroke-dasharray:3 3" />
+        <text x="725" y="74" font-family="Geist Mono,monospace" font-size="10" style="fill:var(--bad)">TBT SLO</text>
+
+        <!-- large chunk rejected -->
+        <g>
+          <rect x="160" y="170" width="220" height="22" rx="3" style="fill:var(--bad-soft);stroke:var(--bad);stroke-dasharray:3 3" />
+          <text x="270" y="186" text-anchor="middle" font-family="Inter,sans-serif" font-size="10" style="fill:var(--bad)">rejected: chunk too large, would break TBT</text>
+        </g>
+        <text x="40" y="170" font-family="Geist Mono,monospace" font-size="10" style="fill:var(--bad)">case</text>
+
+        <!-- legend -->
+        <g transform="translate(40,210)">
+          <rect x="0" y="0" width="12" height="12" rx="3" style="fill:var(--accent)" />
+          <text x="20" y="10" font-family="Inter,sans-serif" font-size="11" style="fill:var(--fg-soft)">decode step</text>
+          <rect x="110" y="0" width="12" height="12" rx="3" style="fill:var(--accent-soft);stroke:var(--accent)" />
+          <text x="130" y="10" font-family="Inter,sans-serif" font-size="11" style="fill:var(--fg-soft)">prefill chunk</text>
+          <line x1="240" y1="6" x2="270" y2="6" style="stroke:var(--bad);stroke-dasharray:3 3" />
+          <text x="280" y="10" font-family="Inter,sans-serif" font-size="11" style="fill:var(--fg-soft)">TBT SLO line</text>
+        </g>
+      </svg>
+    </div>
+
+    <!-- 4. The numbers -->
+    <div class="wt" style="margin-top:48px;">
+      <div class="wt-text">
+        <p><strong>The numbers come from production-shaped traces, not synthetic benchmarks.</strong> The evaluation uses a 2 prefill, 2 decode A100 cluster, DeepSeek-V2-Lite as the model, and a trace from "Company X" that the authors describe as production derived. Across that setup, the static baselines collapse in obvious ways. A queue-length threshold that only deflects when the prefill queue is fully empty under-deflects and gets nothing. A prompt-length threshold that always deflects short requests over-deflects and breaks TBT 1.5 percent of the time. The Oracle that knows the future and sweeps every possible schedule lands at 2.6 second P95 TTFT and 99.5 percent SLO attainment.[1]</p>
+        <p>Kairos is a deployable approximation of the Oracle. The published numbers are P95 TTFT reductions up to 81 percent and SLO attainment improvements up to 79 percent over the state-of-the-art disaggregated schedulers it was compared against, with a per-request routing cost of under one millisecond. The implementation is roughly 2,000 lines of Python on top of vLLM 0.18.1.[1] That last detail is the part an architect cares about: a research paper that ships as a vLLM patch is much more likely to land in your stack than one that ships as a paper.</p>
+      </div>
+      <aside class="wt-aside">
+        <span class="label">Why this matters</span>
+        <p>Most LLM serving "breakthroughs" that get HN points are wall-clock wins on toy benchmarks. The interesting question is always: does this survive your real request mix, and can you actually deploy it. The Kairos numbers above are both. If you are running vLLM in production today, you can read the patch.</p>
+      </aside>
+    </div>
+
+    <div class="wt-diagram">
+      <svg viewBox="0 0 760 240" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Policy comparison table: baseline, static queue, static length, oracle, on P95 TTFT, TBT violation, SLO attainment.">
+        <text x="20" y="24" font-family="Inter,sans-serif" font-size="13" font-weight="600" style="fill:var(--fg)">Policy comparison on the bursty trace</text>
+
+        <!-- table -->
+        <g transform="translate(20,50)" font-family="Inter,sans-serif" font-size="12">
+          <rect x="0" y="0" width="720" height="160" rx="10" style="fill:var(--bg);stroke:var(--border)" />
+
+          <!-- header row -->
+          <g style="fill:var(--fg-mute)">
+            <text x="20" y="24" font-family="Geist Mono,monospace" font-size="10" letter-spacing="0.12em" style="fill:var(--fg-mute)">POLICY</text>
+            <text x="240" y="24" font-family="Geist Mono,monospace" font-size="10" letter-spacing="0.12em">DEFLECTIONS</text>
+            <text x="360" y="24" font-family="Geist Mono,monospace" font-size="10" letter-spacing="0.12em">P95 TTFT (s)</text>
+            <text x="490" y="24" font-family="Geist Mono,monospace" font-size="10" letter-spacing="0.12em">TBT VIOL.</text>
+            <text x="610" y="24" font-family="Geist Mono,monospace" font-size="10" letter-spacing="0.12em">SLO ATTAIN.</text>
+          </g>
+          <line x1="14" y1="34" x2="706" y2="34" style="stroke:var(--border)" />
+
+          <!-- rows -->
+          <g>
+            <text x="20" y="58" style="fill:var(--fg)">Baseline (no deflection)</text>
+            <text x="240" y="58" style="fill:var(--fg-soft)">0</text>
+            <text x="360" y="58" style="fill:var(--fg-soft)">4.5</text>
+            <text x="490" y="58" style="fill:var(--fg-soft)">0.0%</text>
+            <text x="610" y="58" style="fill:var(--fg-soft)">88.0%</text>
+          </g>
+          <line x1="14" y1="68" x2="706" y2="68" style="stroke:var(--border-soft)" />
+
+          <g>
+            <text x="20" y="86" style="fill:var(--fg)">SQ (queue &gt; 1)</text>
+            <text x="240" y="86" style="fill:var(--fg-soft)">7</text>
+            <text x="360" y="86" style="fill:var(--fg-soft)">4.2</text>
+            <text x="490" y="86" style="fill:var(--fg-soft)">1.0%</text>
+            <text x="610" y="86" style="fill:var(--fg-soft)">91.7%</text>
+          </g>
+          <line x1="14" y1="96" x2="706" y2="96" style="stroke:var(--border-soft)" />
+
+          <g>
+            <text x="20" y="114" style="fill:var(--fg)">SL (prompt &lt; 2048)</text>
+            <text x="240" y="114" style="fill:var(--fg-soft)">298</text>
+            <text x="360" y="114" style="fill:var(--bad)">3.6</text>
+            <text x="490" y="114" style="fill:var(--bad)">1.5%</text>
+            <text x="610" y="114" style="fill:var(--fg-soft)">95.1%</text>
+          </g>
+          <line x1="14" y1="124" x2="706" y2="124" style="stroke:var(--border-soft)" />
+
+          <g>
+            <text x="20" y="142" style="fill:var(--accent)" font-weight="600">Oracle (perfect schedule sweep)</text>
+            <text x="240" y="142" style="fill:var(--fg)">251</text>
+            <text x="360" y="142" style="fill:var(--accent)" font-weight="600">2.6</text>
+            <text x="490" y="142" style="fill:var(--fg)">0.0%</text>
+            <text x="610" y="142" style="fill:var(--accent)" font-weight="600">99.5%</text>
+          </g>
+        </g>
+
+        <text x="20" y="232" font-family="Inter,sans-serif" font-size="11" style="fill:var(--fg-mute)">SL is over-deflecting, Oracle is the upper bound, Kairos sits between them with no TBT violations.</text>
+      </svg>
+    </div>
+  </div>
+</section>
+
+<!-- COMMON CONFUSIONS -->
+<section id="confuse">
+  <div class="wrap">
+    <span class="label">Common confusions</span>
+    <h2 class="h2" style="margin-top:18px;">Four things people get wrong about prefill deflection.</h2>
+
+    <div class="conf-grid">
+      <div class="conf">
+        <span class="conf-num">Confusion 01</span>
+        <svg class="conf-icon" viewBox="0 0 60 60" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <rect x="6" y="6" width="48" height="48" rx="8" style="fill:none;stroke:var(--border);stroke-width:1.5" />
+          <line x1="6" y1="30" x2="54" y2="30" style="stroke:var(--fg-mute);stroke-width:1" />
+          <text x="14" y="22" font-family="Geist Mono,monospace" font-size="8" style="fill:var(--fg-soft)">PD</text>
+          <text x="14" y="46" font-family="Geist Mono,monospace" font-size="8" style="fill:var(--fg-soft)">DP</text>
+          <path d="M 30 6 L 30 54" style="stroke:var(--accent);stroke-width:1.5" stroke-dasharray="3 3">
+            <animate attributeName="stroke-dashoffset" values="0;-12" dur="1.5s" repeatCount="indefinite" />
+          </path>
+        </svg>
+        <p class="conf-q">"Prefill deflection is just disaggregated prefill with the wires crossed."</p>
+        <p class="conf-a">It looks like that, but the wiring is exactly the same. The dispatcher picks a destination. What changes is the policy. In classical PD disaggregation, every prefill goes to a prefill node. In Kairos, some prefills go to a decode node, executed in chunks that share the decode batch. The KV transfer between pools is the cost you are trying to avoid, and deflection deletes it for the requests that need it most.[1][3]</p>
+      </div>
+
+      <div class="conf">
+        <span class="conf-num">Confusion 02</span>
+        <p class="conf-q">"This is just chunked prefill, like Sarathi."</p>
+        <p class="conf-a">Chunked prefill is the mechanism. Kairos borrows it. The difference is that Sarathi uses a fixed chunk size and runs prefill and decode co-located on the same node, with the constant tension between TTFT and TBT. Kairos keeps disaggregation and chooses, per request, a chunk size that fits the current decode batch on the target decode node. The chunk sweep is what sets it apart from a Sarathi-style colocation.[1][4]</p>
+      </div>
+
+      <div class="conf">
+        <span class="conf-num">Confusion 03</span>
+        <p class="conf-q">"Deflection will break TBT the moment load spikes, so the safety check is theater."</p>
+        <p class="conf-a">The whole paper is the safety check. The dispatcher computes, before routing, the largest chunk size sequence on each decode node that would keep every in-flight decoder's TBT under the SLO. If no such schedule exists on any decode node, the request goes to a prefill node and nothing changes. The under-deflecting baselines (SQ with threshold 4) sit at zero deflections, the over-deflecting one (SL with prompt &lt; 2048) breaks TBT 1.5 percent of the time, and Kairos lands at zero violations because it refuses to deflect unless the safety check passes.[1]</p>
+      </div>
+
+      <div class="conf">
+        <span class="conf-num">Confusion 04</span>
+        <svg class="conf-icon" viewBox="0 0 60 60" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <circle cx="20" cy="30" r="12" style="fill:none;stroke:var(--bad);stroke-width:1.5" />
+          <text x="20" y="33" text-anchor="middle" font-family="Geist Mono,monospace" font-size="8" style="fill:var(--bad)">PPD</text>
+          <circle cx="44" cy="30" r="12" style="fill:none;stroke:var(--accent);stroke-width:1.5" />
+          <text x="44" y="33" text-anchor="middle" font-family="Geist Mono,monospace" font-size="8" style="fill:var(--accent)">KRS</text>
+          <path d="M 32 30 L 32 30" style="stroke:var(--fg-soft);stroke-width:1.5" />
+          <circle cx="32" cy="30" r="1.5" style="fill:var(--fg-soft)">
+            <animate attributeName="r" values="1.5;3.5;1.5" dur="2s" repeatCount="indefinite" />
+          </circle>
+        </svg>
+        <p class="conf-q">"This is the same trick as PPD multi-turn deflection."</p>
+        <p class="conf-a">It is adjacent, not identical. PPD (Prefill-Prefill-capable Decode) also routes work to a decode node, but only for Turn 2+ requests, on the rationale that append-prefill with cached KV is much cheaper than full prefill and only mildly disturbs decode. Kairos is more general: any request can be deflected if the decode node has headroom and the safety check passes. PPD is a special case of the same idea, restricted to multi-turn traffic and a fixed heuristic.[1]</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- WHERE TO GO NEXT -->
+<section id="next">
+  <div class="wrap">
+    <span class="label">Where to go next</span>
+    <h2 class="h2" style="margin-top:18px;">Three followups that earn their click.</h2>
+
+    <div class="links">
+      <a class="link-card" href="https://arxiv.org/abs/2607.02043" target="_blank" rel="noopener">
+        <span class="label">The paper</span>
+        <svg class="link-icon" viewBox="0 0 60 40" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <rect x="2" y="2" width="56" height="36" rx="4" style="fill:var(--bg-elev);stroke:var(--border)" />
+          <line x1="10" y1="14" x2="50" y2="14" style="stroke:var(--fg-soft);stroke-width:1.5" />
+          <line x1="10" y1="22" x2="44" y2="22" style="stroke:var(--fg-soft);stroke-width:1.5" />
+          <line x1="10" y1="30" x2="36" y2="30" style="stroke:var(--fg-soft);stroke-width:1.5" />
+          <rect x="0" y="6" width="3" height="28" style="fill:var(--accent)">
+            <animate attributeName="height" values="14;28;14" dur="3s" repeatCount="indefinite" />
+            <animate attributeName="y" values="14;6;14" dur="3s" repeatCount="indefinite" />
+          </rect>
+        </svg>
+        <p class="link-title">Kairos: Load-Aware Prefill Deflection (arXiv 2607.02043)</p>
+        <p class="link-desc">Microsoft, July 2026. Read section 3 for the profiling data and section 4 for the dispatcher algorithm. The chunk sweep is the only piece you actually need to understand to grasp the design.</p>
+      </a>
+
+      <a class="link-card" href="https://github.com/sudokara/Kairos" target="_blank" rel="noopener">
+        <span class="label">The implementation</span>
+        <svg class="link-icon" viewBox="0 0 60 40" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <rect x="2" y="2" width="56" height="36" rx="4" style="fill:var(--bg-elev);stroke:var(--border)" />
+          <circle cx="16" cy="14" r="3.5" style="fill:var(--accent)">
+            <animate attributeName="cx" values="16;44;16" dur="4s" repeatCount="indefinite" />
+            <animate attributeName="cy" values="14;26;14" dur="4s" repeatCount="indefinite" />
+          </circle>
+          <circle cx="16" cy="14" r="3.5" style="fill:none;stroke:var(--accent);stroke-width:1">
+            <animate attributeName="r" values="3.5;9;3.5" dur="2.4s" repeatCount="indefinite" />
+            <animate attributeName="opacity" values="0.8;0;0.8" dur="2.4s" repeatCount="indefinite" />
+            <animate attributeName="cx" values="16;44;16" dur="4s" repeatCount="indefinite" />
+            <animate attributeName="cy" values="14;26;14" dur="4s" repeatCount="indefinite" />
+          </circle>
+        </svg>
+        <p class="link-title">sudokara/Kairos on GitHub</p>
+        <p class="link-desc">Roughly 2,000 lines of Python on top of vLLM 0.18.1. The dispatcher, the step-latency predictors, and the chunked prefill scheduler are all readable in one sitting. If you are running vLLM, you can read this patch.</p>
+      </a>
+
+      <a class="link-card" href="https://docs.vllm.ai/en/latest/features/disagg_prefill/" target="_blank" rel="noopener">
+        <span class="label">The baseline to know first</span>
+        <svg class="link-icon" viewBox="0 0 60 40" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <rect x="2" y="2" width="56" height="36" rx="4" style="fill:var(--bg-elev);stroke:var(--border)" />
+          <rect x="8" y="22" width="10" height="10" rx="2" style="fill:var(--bad)" />
+          <rect x="24" y="14" width="10" height="18" rx="2" style="fill:var(--warn)" />
+          <rect x="40" y="6" width="10" height="26" rx="2" style="fill:var(--accent)">
+            <animate attributeName="height" values="20;26;20" dur="2.4s" repeatCount="indefinite" />
+            <animate attributeName="y" values="12;6;12" dur="2.4s" repeatCount="indefinite" />
+          </rect>
+          <line x1="6" y1="34" x2="54" y2="34" style="stroke:var(--fg-mute);stroke-width:1" />
+        </svg>
+        <p class="link-title">vLLM disaggregated prefilling docs</p>
+        <p class="link-desc">The exact production version Kairos sits on top of. Read this first, otherwise the chunked prefill and KV connector language will read as jargon. vLLM and SGLang both ship this pattern natively as of 2026.[5]</p>
+      </a>
+    </div>
+  </div>
+</section>
+
+<!-- FOOTER -->
+<footer>
+  <div class="wrap">
+    <div class="mono">Day 9 of the explainer series. Built by Hermes using the explainer-builder skill. Sources are inline, numbers come from the Kairos paper unless tagged otherwise.</div>
+  </div>
+</footer>
+
+<script>
+  // Theme toggle
+  (function () {
+    var btn = document.getElementById('theme-toggle');
+    if (!btn) return;
+    btn.addEventListener('click', function () {
+      var cur = document.documentElement.getAttribute('data-theme') || 'light';
+      var nxt = cur === 'light' ? 'dark' : 'light';
+      document.documentElement.setAttribute('data-theme', nxt);
+      try { localStorage.setItem('hermes-theme', nxt); } catch (e) {}
+    });
+  })();
+</script>
+
+</body>
+</html>
