@@ -1,0 +1,776 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Multimodal Embedding Space: How EmbeddingGemma 2 Puts Text, Code, Images, Video, and Audio in One Vector. Hermes Daily Explainer.</title>
+<script>
+  // Pre-paint theme: read storage before stylesheet so first frame is correct.
+  (function () {
+    try {
+      var saved = localStorage.getItem('hermes-theme');
+      var prefers = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+      var t = saved || (prefers ? 'dark' : 'light');
+      document.documentElement.setAttribute('data-theme', t);
+    } catch (e) {}
+  })();
+</script>
+<style>
+  :root {
+    --bg: #ffffff;
+    --bg-soft: #fafafa;
+    --bg-elev: #f4f4f5;
+    --fg: #0d0d0d;
+    --fg-soft: #4a4a4a;
+    --fg-mute: #7a7a7a;
+    --border: rgba(13, 13, 13, 0.08);
+    --border-soft: rgba(13, 13, 13, 0.05);
+    --accent: #18E299;
+    --accent-soft: rgba(24, 226, 153, 0.10);
+    --accent-ring: rgba(24, 226, 153, 0.35);
+    --code-bg: #f4f4f5;
+    --shadow: 0 1px 2px rgba(13, 13, 13, 0.04), 0 4px 16px rgba(13, 13, 13, 0.05);
+    --grad-hero: radial-gradient(ellipse 80% 60% at 50% 0%, rgba(24, 226, 153, 0.10), transparent 60%);
+    --warm: #f59e0b;
+    --warm-soft: rgba(245, 158, 11, 0.10);
+    --cool: #3b82f6;
+    --cool-soft: rgba(59, 130, 246, 0.10);
+    --violet: #8b5cf6;
+    --violet-soft: rgba(139, 92, 246, 0.10);
+    --bad: #ef4444;
+    --bad-soft: rgba(239, 68, 68, 0.10);
+  }
+  html[data-theme="dark"] {
+    --bg: #0a0a0a;
+    --bg-soft: #0f0f10;
+    --bg-elev: #16161a;
+    --fg: #f5f5f5;
+    --fg-soft: #c2c2c8;
+    --fg-mute: #8a8a92;
+    --border: rgba(255, 255, 255, 0.10);
+    --border-soft: rgba(255, 255, 255, 0.05);
+    --accent: #2af5a8;
+    --accent-soft: rgba(42, 245, 168, 0.12);
+    --accent-ring: rgba(42, 245, 168, 0.40);
+    --code-bg: #16161a;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 4px 16px rgba(0, 0, 0, 0.5);
+    --grad-hero: radial-gradient(ellipse 80% 60% at 50% 0%, rgba(42, 245, 168, 0.14), transparent 60%);
+    --warm-soft: rgba(245, 158, 11, 0.14);
+    --cool-soft: rgba(59, 130, 246, 0.14);
+    --violet-soft: rgba(139, 92, 246, 0.14);
+    --bad-soft: rgba(239, 68, 68, 0.14);
+  }
+  @media (prefers-color-scheme: dark) {
+    html:not([data-theme="light"]) {
+      --bg: #0a0a0a;
+      --bg-soft: #0f0f10;
+      --bg-elev: #16161a;
+      --fg: #f5f5f5;
+      --fg-soft: #c2c2c8;
+      --fg-mute: #8a8a92;
+      --border: rgba(255, 255, 255, 0.10);
+      --border-soft: rgba(255, 255, 255, 0.05);
+      --accent: #2af5a8;
+      --accent-soft: rgba(42, 245, 168, 0.12);
+      --accent-ring: rgba(42, 245, 168, 0.40);
+      --code-bg: #16161a;
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 4px 16px rgba(0, 0, 0, 0.5);
+      --grad-hero: radial-gradient(ellipse 80% 60% at 50% 0%, rgba(42, 245, 168, 0.14), transparent 60%);
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--fg); overflow-x: hidden; }
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    font-size: 17px; line-height: 1.55; color: var(--fg);
+    -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
+  }
+  .wrap { max-width: 1200px; margin: 0 auto; padding: 0 24px; }
+  a { color: var(--accent); text-decoration: none; border-bottom: 1px solid transparent; }
+  a:hover { border-bottom-color: var(--accent-ring); }
+  code, pre, .mono { font-family: 'Geist Mono', 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  code { background: var(--code-bg); padding: 1px 6px; border-radius: 4px; font-size: 0.92em; }
+  pre { background: var(--code-bg); padding: 16px 18px; border-radius: 10px; overflow-x: auto; font-size: 13.5px; line-height: 1.55; border: 1px solid var(--border-soft); }
+  pre code { background: transparent; padding: 0; }
+
+  /* NAV */
+  nav.top {
+    position: sticky; top: 0; z-index: 50;
+    background: color-mix(in oklab, var(--bg) 88%, transparent);
+    backdrop-filter: saturate(180%) blur(12px);
+    -webkit-backdrop-filter: saturate(180%) blur(12px);
+    border-bottom: 1px solid var(--border-soft);
+  }
+  nav.top .inner { display: flex; align-items: center; justify-content: space-between; height: 56px; }
+  nav.top .brand { font-weight: 600; font-size: 14px; letter-spacing: -0.01em; display: flex; align-items: center; gap: 10px; }
+  nav.top .brand .dot { width: 8px; height: 8px; border-radius: 9999px; background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  nav.top .right { display: flex; align-items: center; gap: 14px; font-size: 13px; color: var(--fg-soft); }
+  nav.top .pill { padding: 5px 12px; border-radius: 9999px; border: 1px solid var(--border); font-size: 12.5px; }
+  nav.top button.theme {
+    background: transparent; border: 1px solid var(--border); color: var(--fg-soft);
+    width: 34px; height: 34px; border-radius: 9999px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+    transition: all 200ms ease;
+  }
+  nav.top button.theme:hover { color: var(--fg); border-color: var(--fg-mute); }
+  nav.top button.theme svg { width: 16px; height: 16px; }
+
+  /* HERO */
+  header.hero {
+    padding: 96px 0 64px;
+    background: var(--grad-hero);
+    border-bottom: 1px solid var(--border-soft);
+  }
+  .tag { display: inline-block; font-family: 'Geist Mono', monospace; font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--fg-soft); padding: 5px 11px; border: 1px solid var(--border); border-radius: 9999px; background: var(--bg-soft); }
+  h1.hero-title { font-size: 64px; line-height: 1.05; letter-spacing: -0.025em; margin: 18px 0 18px; font-weight: 700; color: var(--fg); }
+  p.tagline { font-size: 19px; line-height: 1.55; color: var(--fg-soft); max-width: 720px; margin: 0 0 36px; }
+  .get-list { list-style: none; padding: 0; margin: 0 0 8px; display: grid; grid-template-columns: 1fr 1fr; gap: 10px 28px; max-width: 760px; }
+  .get-list li { display: flex; align-items: flex-start; gap: 10px; font-size: 15.5px; color: var(--fg-soft); }
+  .get-list li::before { content: ''; width: 6px; height: 6px; border-radius: 9999px; background: var(--accent); margin-top: 9px; flex: 0 0 auto; }
+
+  /* MODEL CALLOUT */
+  .model-callout {
+    border: 1px solid var(--accent-ring);
+    background: linear-gradient(180deg, var(--accent-soft), transparent 70%);
+    border-radius: 14px;
+    padding: 28px 32px;
+    margin: 64px 0 0;
+  }
+  .model-callout .label { font-family: 'Geist Mono', monospace; font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--accent); margin-bottom: 10px; }
+  .model-callout p { font-size: 21px; line-height: 1.45; letter-spacing: -0.01em; margin: 0; color: var(--fg); font-weight: 500; }
+
+  /* SECTIONS */
+  section.block { padding: 88px 0 0; }
+  section.block h2 { font-size: 40px; line-height: 1.1; letter-spacing: -0.02em; margin: 0 0 14px; font-weight: 700; }
+  section.block h3 { font-size: 24px; line-height: 1.25; letter-spacing: -0.01em; margin: 0 0 12px; font-weight: 600; }
+  section.block p { font-size: 17px; line-height: 1.62; color: var(--fg-soft); margin: 0 0 18px; max-width: 760px; }
+  section.block p strong { color: var(--fg); font-weight: 600; }
+  section.block .section-tag { font-family: 'Geist Mono', monospace; font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--fg-mute); margin-bottom: 14px; display: inline-block; }
+  .figure { margin: 28px 0 18px; padding: 0; }
+  .figure svg { width: 100%; height: auto; display: block; max-width: 100%; }
+  .figure.hero-figure svg { max-width: 760px; margin: 0 auto; }
+  .figure .cap { font-size: 13px; color: var(--fg-mute); margin-top: 10px; text-align: center; font-family: 'Geist Mono', monospace; letter-spacing: 0.02em; }
+
+  .why { margin: 22px 0 0; padding: 16px 20px; border-left: 3px solid var(--accent); background: var(--accent-soft); border-radius: 0 10px 10px 0; max-width: 760px; }
+  .why .label { font-family: 'Geist Mono', monospace; font-size: 10.5px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--accent); margin-bottom: 6px; }
+  .why p { font-size: 15px; color: var(--fg); margin: 0; line-height: 1.55; }
+
+  /* CONFUSIONS */
+  .conf-grid { display: grid; grid-template-columns: 1fr; gap: 14px; margin: 28px 0 0; }
+  .conf-card { border: 1px solid var(--border); border-radius: 12px; padding: 22px 26px; background: var(--bg-soft); }
+  .conf-card .head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 10px; }
+  .conf-card .num { font-family: 'Geist Mono', monospace; font-size: 12px; color: var(--fg-mute); }
+  .conf-card .wrong { color: var(--bad); font-weight: 600; font-size: 16px; }
+  .conf-card .right { color: var(--fg); font-size: 15.5px; line-height: 1.55; margin: 6px 0 0; }
+  .conf-card .right strong { color: var(--accent); font-weight: 600; }
+
+  /* NEXT */
+  .next-list { list-style: none; padding: 0; margin: 22px 0 0; display: grid; grid-template-columns: 1fr; gap: 10px; }
+  .next-list li { border: 1px solid var(--border); border-radius: 10px; padding: 14px 18px; background: var(--bg-soft); display: flex; align-items: baseline; gap: 12px; }
+  .next-list .arrow { color: var(--accent); font-family: 'Geist Mono', monospace; }
+  .next-list a { color: var(--fg); font-weight: 500; }
+  .next-list .why-link { color: var(--fg-mute); font-size: 13.5px; margin-left: 4px; }
+
+  /* FOOTER */
+  footer.bot { margin: 96px 0 48px; padding-top: 24px; border-top: 1px solid var(--border-soft); color: var(--fg-mute); font-size: 13px; line-height: 1.55; }
+
+  /* SOURCES */
+  .sources { margin: 64px 0 0; padding: 22px 26px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-soft); }
+  .sources .label { font-family: 'Geist Mono', monospace; font-size: 10.5px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--fg-mute); margin-bottom: 12px; }
+  .sources ol { margin: 0; padding: 0 0 0 22px; font-size: 14px; line-height: 1.6; color: var(--fg-soft); }
+  .sources li { margin-bottom: 4px; }
+  .sources a { color: var(--fg-soft); }
+
+  /* ANIMATIONS */
+  @keyframes pulseGlow {
+    0%, 100% { opacity: 0.65; transform: scale(1); }
+    50% { opacity: 1; transform: scale(1.05); }
+  }
+  @keyframes drift {
+    0%   { transform: translateX(0px)  translateY(0px);  opacity: 0.0; }
+    10%  { opacity: 0.8; }
+    50%  { transform: translateX(6px)  translateY(-3px); opacity: 1.0; }
+    100% { transform: translateX(0px)  translateY(0px);  opacity: 0.0; }
+  }
+  @keyframes orbit {
+    from { transform: rotate(0deg);   }
+    to   { transform: rotate(360deg); }
+  }
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(4px); }
+    to   { opacity: 1; transform: translateY(0);   }
+  }
+  @keyframes ringPulse {
+    0%   { r: 16; opacity: 0.0; }
+    30%  { opacity: 0.6; }
+    100% { r: 42; opacity: 0.0; }
+  }
+  @keyframes nestingGlow {
+    0%, 100% { stroke-opacity: 0.35; }
+    50%      { stroke-opacity: 0.85; }
+  }
+  @keyframes hashSlide {
+    0%   { transform: translateX(-12px); opacity: 0; }
+    100% { transform: translateX(0);     opacity: 1; }
+  }
+  @keyframes tokenDrop {
+    0%   { transform: translateY(-8px); opacity: 0; }
+    100% { transform: translateY(0);     opacity: 1; }
+  }
+  @keyframes scoreBar {
+    0%   { transform: scaleX(0); }
+    100% { transform: scaleX(1); }
+  }
+  @keyframes dotBlink {
+    0%, 100% { opacity: 0.25; }
+    50%      { opacity: 1.0;  }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.001ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.001ms !important;
+    }
+  }
+
+  @media (max-width: 760px) {
+    h1.hero-title { font-size: 44px; }
+    section.block h2 { font-size: 32px; }
+    .get-list { grid-template-columns: 1fr; }
+    header.hero { padding: 64px 0 48px; }
+    .model-callout { padding: 22px 22px; }
+    .model-callout p { font-size: 18px; }
+  }
+</style>
+</head>
+<body>
+
+<nav class="top">
+  <div class="wrap inner">
+    <div class="brand"><span class="dot"></span> Hermes Daily Explainer</div>
+    <div class="right">
+      <span class="pill mono">DAY 11</span>
+      <button class="theme" id="themeBtn" aria-label="Toggle theme">
+        <svg id="icoLight" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="display:none"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+        <svg id="icoDark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+        <svg viewBox="0 0 100 100" width="0" height="0" style="position:absolute" aria-hidden="true">
+          <defs>
+            <linearGradient id="projG" x1="0" x2="1" y1="0" y2="0">
+              <stop offset="0" stop-color="var(--cool)" stop-opacity="0.05"/>
+              <stop offset="1" stop-color="var(--accent)" stop-opacity="0.6"/>
+            </linearGradient>
+            <radialGradient id="coreG" cx="50%" cy="50%" r="50%">
+              <stop offset="0" stop-color="var(--accent)" stop-opacity="0.55"/>
+              <stop offset="1" stop-color="var(--accent)" stop-opacity="0"/>
+            </radialGradient>
+            <marker id="arr1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+              <path d="M0,0 L10,5 L0,10 z" style="fill:var(--fg-mute)"/>
+            </marker>
+            <marker id="arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+              <path d="M0,0 L10,5 L0,10 z" style="fill:var(--accent)"/>
+            </marker>
+            <marker id="arr3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+              <path d="M0,0 L10,5 L0,10 z" style="fill:var(--cool)"/>
+            </marker>
+            <marker id="arr4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+              <path d="M0,0 L10,5 L0,10 z" style="fill:var(--accent)"/>
+            </marker>
+          </defs>
+        </svg>
+      </button>
+    </div>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="wrap">
+    <span class="tag">10 / 07 / 2026 &middot; 9 AM &middot; DAY 11</span>
+    <h1 class="hero-title">Multimodal Embedding Space: <br/>How EmbeddingGemma 2 Puts Five Modalities in One Vector</h1>
+    <p class="tagline">A 740M model maps text, code, images, video, and audio into the same 768-dimensional space. Modularity means you ship only the encoders you need; Matryoshka truncation means the same comparison works at 128d, 256d, 512d, or 768d.</p>
+    <ul class="get-list">
+      <li>What "natively multimodal" embedding space actually means under the hood</li>
+      <li>The modular encoder trick: 270M / 440M / 570M / 740M on demand, same vector</li>
+      <li>How Matryoshka truncation turns one model into a cheap first-stage retriever</li>
+      <li>Why task instructions are a first-class control, not a hack</li>
+    </ul>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <div class="model-callout">
+    <div class="label">THE MODEL IN ONE SENTENCE</div>
+    <p>Each input modality enters through a small specialized encoder, but every encoder projects into the same 768-dimensional space, so a text query can be cosine-compared directly against an audio clip, a video frame, or a screenshot of code.</p>
+  </div>
+
+  <!-- ============== SECTION 2: MENTAL MODEL DIAGRAM ============== -->
+  <section class="block">
+    <span class="section-tag">THE MENTAL MODEL</span>
+    <h2>Four encoders, one shared vector</h2>
+    <p>Most embedding systems bolt on a separate text encoder, a separate image encoder, a separate audio encoder, and a hand-written bridge that fakes alignment. EmbeddingGemma 2 takes a different bet: the encoders exist, but they were trained to agree on a single coordinate system. Once you accept that, every comparison you can do with text alone (nearest neighbors, MMR, shortlists) just works across modalities, with no glue.</p>
+    <div class="figure hero-figure">
+      <svg viewBox="0 0 760 420" role="img" aria-label="Four encoders (text, code, image, audio) projecting into a single 768-dimensional embedding space.">
+        <defs>
+          <linearGradient id="projG" x1="0" x2="1" y1="0" y2="0">
+            <stop offset="0" stop-color="var(--cool)" stop-opacity="0.05"/>
+            <stop offset="1" stop-color="var(--accent)" stop-opacity="0.6"/>
+          </linearGradient>
+          <radialGradient id="coreG" cx="50%" cy="50%" r="50%">
+            <stop offset="0" stop-color="var(--accent)" stop-opacity="0.55"/>
+            <stop offset="1" stop-color="var(--accent)" stop-opacity="0"/>
+          </radialGradient>
+        </defs>
+
+        <!-- Title strip -->
+        <text x="20" y="30" font-family="Geist Mono, monospace" font-size="11" letter-spacing="2" style="fill:var(--fg-mute)">MODALITY ENCODERS</text>
+        <text x="500" y="30" font-family="Geist Mono, monospace" font-size="11" letter-spacing="2" style="fill:var(--fg-mute)">SHARED 768-d SPACE</text>
+
+        <!-- Encoder blocks -->
+        <!-- Text -->
+        <g>
+          <rect x="20" y="60" width="140" height="44" rx="10" style="fill:var(--bg-elev);stroke:var(--border)" />
+          <text x="90" y="80" text-anchor="middle" font-size="13" font-weight="600" style="fill:var(--fg)">Text</text>
+          <text x="90" y="96" text-anchor="middle" font-size="11" font-family="Geist Mono, monospace" style="fill:var(--fg-mute)">270M params</text>
+          <animateTransform attributeName="transform" type="translate" values="0,0; 0,-2; 0,0" dur="4s" repeatCount="indefinite"/>
+        </g>
+        <!-- Code -->
+        <g>
+          <rect x="20" y="116" width="140" height="44" rx="10" style="fill:var(--bg-elev);stroke:var(--border)" />
+          <text x="90" y="136" text-anchor="middle" font-size="13" font-weight="600" style="fill:var(--fg)">Code</text>
+          <text x="90" y="152" text-anchor="middle" font-size="11" font-family="Geist Mono, monospace" style="fill:var(--fg-mute)">270M params</text>
+          <animateTransform attributeName="transform" type="translate" values="0,0; 0,-2; 0,0" dur="4s" begin="0.5s" repeatCount="indefinite"/>
+        </g>
+        <!-- Image -->
+        <g>
+          <rect x="20" y="172" width="140" height="44" rx="10" style="fill:var(--bg-elev);stroke:var(--violet)" />
+          <text x="90" y="192" text-anchor="middle" font-size="13" font-weight="600" style="fill:var(--fg)">Image / video</text>
+          <text x="90" y="208" text-anchor="middle" font-size="11" font-family="Geist Mono, monospace" style="fill:var(--violet)">+170M params</text>
+          <animateTransform attributeName="transform" type="translate" values="0,0; 0,-2; 0,0" dur="4s" begin="1s" repeatCount="indefinite"/>
+        </g>
+        <!-- Audio -->
+        <g>
+          <rect x="20" y="228" width="140" height="44" rx="10" style="fill:var(--bg-elev);stroke:var(--warm)" />
+          <text x="90" y="248" text-anchor="middle" font-size="13" font-weight="600" style="fill:var(--fg)">Audio</text>
+          <text x="90" y="264" text-anchor="middle" font-size="11" font-family="Geist Mono, monospace" style="fill:var(--warm)">+300M params</text>
+          <animateTransform attributeName="transform" type="translate" values="0,0; 0,-2; 0,0" dur="4s" begin="1.5s" repeatCount="indefinite"/>
+        </g>
+
+        <!-- Projection lines (animated dash) -->
+        <g stroke="url(#projG)" stroke-width="1.6" fill="none" opacity="0.95">
+          <path d="M 160 82  C 260 82,  360 200, 470 210" stroke-dasharray="6 4">
+            <animate attributeName="stroke-dashoffset" from="40" to="0" dur="1.6s" repeatCount="indefinite"/>
+          </path>
+          <path d="M 160 138 C 260 138, 360 210, 470 220" stroke-dasharray="6 4">
+            <animate attributeName="stroke-dashoffset" from="40" to="0" dur="1.6s" begin="0.2s" repeatCount="indefinite"/>
+          </path>
+          <path d="M 160 194 C 260 194, 360 220, 470 230" stroke-dasharray="6 4">
+            <animate attributeName="stroke-dashoffset" from="40" to="0" dur="1.6s" begin="0.4s" repeatCount="indefinite"/>
+          </path>
+          <path d="M 160 250 C 260 250, 360 230, 470 240" stroke-dasharray="6 4">
+            <animate attributeName="stroke-dashoffset" from="40" to="0" dur="1.6s" begin="0.6s" repeatCount="indefinite"/>
+          </path>
+        </g>
+
+        <!-- Shared 768-d sphere -->
+        <g>
+          <circle cx="600" cy="225" r="105" style="fill:var(--bg-elev);stroke:var(--accent);stroke-width:1.5"/>
+          <circle cx="600" cy="225" r="105" style="fill:url(#coreG)" opacity="0.7">
+            <animate attributeName="r" values="105;112;105" dur="5s" repeatCount="indefinite"/>
+          </circle>
+          <text x="600" y="215" text-anchor="middle" font-size="15" font-weight="700" style="fill:var(--fg)">768-d</text>
+          <text x="600" y="234" text-anchor="middle" font-size="11" font-family="Geist Mono, monospace" style="fill:var(--fg-mute)">SHARED SPACE</text>
+
+          <!-- Sample points clustered in the sphere -->
+          <g style="fill:var(--cool)"><circle cx="572" cy="200" r="3"><animate attributeName="opacity" values="0.4;1;0.4" dur="3s" repeatCount="indefinite"/></circle></g>
+          <g style="fill:var(--violet)"><circle cx="630" cy="245" r="3"><animate attributeName="opacity" values="0.4;1;0.4" dur="3.4s" begin="0.3s" repeatCount="indefinite"/></circle></g>
+          <g style="fill:var(--warm)"><circle cx="600" cy="195" r="3"><animate attributeName="opacity" values="0.4;1;0.4" dur="2.8s" begin="0.6s" repeatCount="indefinite"/></circle></g>
+          <g style="fill:var(--accent)"><circle cx="612" cy="248" r="3"><animate attributeName="opacity" values="0.4;1;0.4" dur="3.2s" begin="0.9s" repeatCount="indefinite"/></circle></g>
+          <g style="fill:var(--cool)"><circle cx="585" cy="230" r="3"><animate attributeName="opacity" values="0.4;1;0.4" dur="3.1s" begin="1.2s" repeatCount="indefinite"/></circle></g>
+        </g>
+
+        <!-- Cosine similarity indicator -->
+        <g>
+          <path d="M 472 195 Q 540 150 612 195" fill="none" style="stroke:var(--accent);stroke-width:1.4;stroke-dasharray:3 3" opacity="0.85"/>
+          <text x="540" y="142" text-anchor="middle" font-size="10.5" font-family="Geist Mono, monospace" style="fill:var(--accent)">cosine = 0.84</text>
+        </g>
+
+        <!-- Equivalence tags below -->
+        <g font-family="Geist Mono, monospace" font-size="10.5" letter-spacing="0.5">
+          <text x="90" y="300" text-anchor="middle" style="fill:var(--fg-mute)">PROJECTION</text>
+          <line x1="200" y1="296" x2="495" y2="296" style="stroke:var(--border)"/>
+          <text x="600" y="300" text-anchor="middle" style="fill:var(--fg-mute)">SHARED COORDINATES</text>
+        </g>
+
+        <!-- Bottom rule -->
+        <text x="380" y="370" text-anchor="middle" font-size="12" style="fill:var(--fg-soft)">Every modality lands on the same axes.</text>
+        <text x="380" y="388" text-anchor="middle" font-size="12" style="fill:var(--fg-mute)">A cosine score of 0.84 means the same thing whether the pair is text/text or text/audio.</text>
+      </svg>
+    </div>
+    <p class="cap">FIGURE 1 &middot; Modality encoders feed projections into one shared 768-dimensional vector space.</p>
+
+    <div class="why">
+      <div class="label">WHY THIS MATTERS</div>
+      <p>Once you have a shared space, every operation you already trust on text embeddings works on audio and image embeddings for free. The bridge problem is gone. Your reranker, your MMR, your shortlist, your ANN index: all the same code, all the same params, all the same recall curve.</p>
+    </div>
+  </section>
+
+  <!-- ============== SECTION 3: WALKTHROUGH ============== -->
+
+  <section class="block">
+    <span class="section-tag">WALKTHROUGH &middot; PART 1</span>
+    <h2>Cross-modal retrieval is the problem this solves</h2>
+    <p>The classic embedding pipeline assumes a single modality. You embed a query, you embed your corpus, you return the nearest neighbors. That works until the user wants to "find the video clip that matches this audio", or "show me the screenshot of code that explains this paragraph", or "what did the customer say in the call when they talked about this UI". Cross-modal retrieval means the query and the candidate can be in different modalities, and a system that only handles text forces you to transcribe, OCR, or caption first. That round trip is where the latency, the privacy leak, and the recall drop happen.</p>
+
+    <div class="figure">
+      <svg viewBox="0 0 760 280" role="img" aria-label="Comparison of single-modality versus multimodal retrieval pipelines.">
+        <text x="20" y="26" font-family="Geist Mono, monospace" font-size="11" letter-spacing="2" style="fill:var(--fg-mute)">SINGLE-MODALITY PIPELINE (OLD)</text>
+
+        <!-- Old path -->
+        <g>
+          <rect x="20" y="50" width="80" height="36" rx="6" style="fill:var(--bg-elev);stroke:var(--border)"/>
+          <text x="60" y="73" text-anchor="middle" font-size="12" style="fill:var(--fg)">Audio</text>
+          <path d="M 100 68 L 145 68" style="stroke:var(--fg-mute);stroke-width:1.2" marker-end="url(#arr1)"/>
+          <rect x="145" y="50" width="90" height="36" rx="6" style="fill:var(--bg-elev);stroke:var(--warm)"/>
+          <text x="190" y="73" text-anchor="middle" font-size="12" style="fill:var(--warm)">Whisper</text>
+          <path d="M 235 68 L 280 68" style="stroke:var(--fg-mute);stroke-width:1.2" marker-end="url(#arr1)"/>
+          <rect x="280" y="50" width="80" height="36" rx="6" style="fill:var(--bg-elev);stroke:var(--border)"/>
+          <text x="320" y="73" text-anchor="middle" font-size="12" style="fill:var(--fg)">Text</text>
+          <path d="M 360 68 L 405 68" style="stroke:var(--fg-mute);stroke-width:1.2" marker-end="url(#arr1)"/>
+          <rect x="405" y="50" width="100" height="36" rx="6" style="fill:var(--bg-elev);stroke:var(--border)"/>
+          <text x="455" y="73" text-anchor="middle" font-size="12" style="fill:var(--fg)">Embedder</text>
+          <text x="475" y="100" font-family="Geist Mono, monospace" font-size="10" style="fill:var(--bad)">leaks audio to server</text>
+        </g>
+        <defs>
+          <marker id="arr1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+            <path d="M0,0 L10,5 L0,10 z" style="fill:var(--fg-mute)"/>
+          </marker>
+        </defs>
+
+        <text x="20" y="160" font-family="Geist Mono, monospace" font-size="11" letter-spacing="2" style="fill:var(--fg-mute)">UNIFIED PIPELINE (EG2)</text>
+
+        <!-- New path -->
+        <g>
+          <rect x="20" y="184" width="80" height="36" rx="6" style="fill:var(--bg-elev);stroke:var(--border)"/>
+          <text x="60" y="207" text-anchor="middle" font-size="12" style="fill:var(--fg)">Audio</text>
+          <path d="M 100 202 L 145 202" style="stroke:var(--accent);stroke-width:1.6" marker-end="url(#arr2)"/>
+          <rect x="145" y="184" width="100" height="36" rx="6" style="fill:var(--bg-elev);stroke:var(--accent)"/>
+          <text x="195" y="207" text-anchor="middle" font-size="12" style="fill:var(--accent)">EG2 audio</text>
+          <path d="M 245 202 L 290 202" style="stroke:var(--accent);stroke-width:1.6" marker-end="url(#arr2)"/>
+          <rect x="290" y="184" width="100" height="36" rx="6" style="fill:var(--bg-elev);stroke:var(--accent)"/>
+          <text x="340" y="207" text-anchor="middle" font-size="12" style="fill:var(--accent)">Same 768-d</text>
+          <text x="350" y="234" font-family="Geist Mono, monospace" font-size="10" style="fill:var(--accent)">on-device, no network</text>
+        </g>
+        <defs>
+          <marker id="arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+            <path d="M0,0 L10,5 L0,10 z" style="fill:var(--accent)"/>
+          </marker>
+        </defs>
+      </svg>
+    </div>
+    <p class="cap">FIGURE 2 &middot; The transcription step is gone. The round trip to a remote server is gone.</p>
+
+    <div class="why">
+      <div class="label">WHY THIS MATTERS</div>
+      <p>Edge inference changes the cost model. Once the embedder runs on the device, the cost of indexing a five-minute meeting or an hour of security footage is the battery cost of running the model. That is qualitatively different from a per-call API bill. For personal-scale search, the right answer is "embed everything you have, never leave the device".</p>
+    </div>
+  </section>
+
+  <section class="block">
+    <span class="section-tag">WALKTHROUGH &middot; PART 2</span>
+    <h2>Modular encoders: 270M, 440M, 570M, or 740M on demand</h2>
+    <p>The architectural bet EmbeddingGemma 2 makes is that modality encoders are additive, not substitutive. The text-and-code encoder is the foundation: 270M parameters, an 8K context window, based on the Gemma 4 decoder. On top of that, you can load a vision encoder (+170M, handles images, video frames, and document screenshots) and an audio encoder (+300M, raw 16kHz mono audio, no transcription). Any subset is a valid model. That is the whole trick: a developer who only does text RAG ships 270M; a developer doing code-and-screenshot search ships 440M; a developer doing voice memo search ships 570M; only the full multimodal consumer pays the 740M cost.</p>
+
+    <div class="figure">
+      <svg viewBox="0 0 760 230" role="img" aria-label="Cumulative parameter counts for the four modular configurations.">
+        <text x="20" y="26" font-family="Geist Mono, monospace" font-size="11" letter-spacing="2" style="fill:var(--fg-mute)">MODULAR LOADOUTS</text>
+
+        <!-- Stacked horizontal bars -->
+        <g font-family="Geist Mono, monospace" font-size="11" style="fill:var(--fg-soft)">
+          <text x="20" y="60">Text only</text>
+          <rect x="160" y="48" width="180" height="20" rx="4" style="fill:var(--accent);opacity:0.85"/>
+          <text x="350" y="62" style="fill:var(--fg)">270M</text>
+
+          <text x="20" y="98">Text + vision</text>
+          <rect x="160" y="86" width="180" height="20" rx="4" style="fill:var(--accent);opacity:0.85"/>
+          <rect x="340" y="86" width="120" height="20" rx="4" style="fill:var(--violet);opacity:0.85"/>
+          <text x="470" y="100" style="fill:var(--fg)">440M</text>
+
+          <text x="20" y="136">Text + audio</text>
+          <rect x="160" y="124" width="180" height="20" rx="4" style="fill:var(--accent);opacity:0.85"/>
+          <rect x="340" y="124" width="200" height="20" rx="4" style="fill:var(--warm);opacity:0.85"/>
+          <text x="550" y="138" style="fill:var(--fg)">570M</text>
+
+          <text x="20" y="174">All four</text>
+          <rect x="160" y="162" width="180" height="20" rx="4" style="fill:var(--accent);opacity:0.85"/>
+          <rect x="340" y="162" width="120" height="20" rx="4" style="fill:var(--violet);opacity:0.85"/>
+          <rect x="460" y="162" width="200" height="20" rx="4" style="fill:var(--warm);opacity:0.85"/>
+          <text x="670" y="176" style="fill:var(--fg)">740M</text>
+        </g>
+
+        <text x="20" y="210" font-size="11" style="fill:var(--fg-mute)">Legend: text (green), vision (violet), audio (warm).</text>
+      </svg>
+    </div>
+    <p class="cap">FIGURE 3 &middot; Every configuration projects into the same 768-d space; the encoder mix is the only thing that changes.</p>
+
+    <div class="why">
+      <div class="label">WHY THIS MATTERS</div>
+      <p>The pattern is "load the encoders you actually use, never the others." For a mobile app that only does text RAG, the 270M text-only model fits in 191MB of RAM. For a desktop tool that indexes screen recordings, the same loader pulls the audio encoder at runtime, the rest of the pipeline is identical. The system is the same code; the deployment target decides which encoders ship.</p>
+    </div>
+  </section>
+
+  <section class="block">
+    <span class="section-tag">WALKTHROUGH &middot; PART 3</span>
+    <h2>Matryoshka truncation: same vector, four resolutions</h2>
+    <p>Matryoshka Representation Learning, the Kusupati et al. 2022 paper that this model uses, is the trick that turns one trained model into four storage tiers. The idea is simple to state: during training, the model is forced to put the most important information in the first 128 dimensions, the next layer in the next 128, and so on. At inference time you can take the first 128, 256, 512, or 768 dimensions of the vector and the comparisons still work, with a known quality dropoff. For text and code you keep 90% of the quality at 128d; for images, video, and audio you keep about 75%. Both are good enough for a first-stage shortlist, where you have a reranker downstream.</p>
+
+    <div class="figure">
+      <svg viewBox="0 0 760 250" role="img" aria-label="Matryoshka nesting: 128d inside 256d inside 512d inside 768d, all comparison-compatible.">
+        <text x="20" y="26" font-family="Geist Mono, monospace" font-size="11" letter-spacing="2" style="fill:var(--fg-mute)">MATRYOSHKA TRUNCATION</text>
+
+        <!-- 4 nested bars -->
+        <g transform="translate(80,60)">
+          <!-- 768 (outermost) -->
+          <rect x="0" y="0" width="600" height="38" rx="8" style="fill:var(--accent-soft);stroke:var(--accent);stroke-width:1.4">
+            <animate attributeName="stroke-opacity" values="0.4;1;0.4" dur="3.5s" repeatCount="indefinite"/>
+          </rect>
+          <text x="14" y="24" font-family="Geist Mono, monospace" font-size="12" style="fill:var(--accent)">768d</text>
+          <text x="586" y="24" text-anchor="end" font-family="Geist Mono, monospace" font-size="11" style="fill:var(--fg-mute)">100% quality &middot; 3KB / vec</text>
+
+          <!-- 512 -->
+          <rect x="20" y="48" width="560" height="38" rx="8" style="fill:var(--bg-elev);stroke:var(--border)"/>
+          <text x="34" y="72" font-family="Geist Mono, monospace" font-size="12" style="fill:var(--fg)">512d</text>
+          <text x="566" y="72" text-anchor="end" font-family="Geist Mono, monospace" font-size="11" style="fill:var(--fg-mute)">~99% &middot; 2KB</text>
+
+          <!-- 256 -->
+          <rect x="40" y="96" width="520" height="38" rx="8" style="fill:var(--bg-elev);stroke:var(--border)"/>
+          <text x="54" y="120" font-family="Geist Mono, monospace" font-size="12" style="fill:var(--fg)">256d</text>
+          <text x="546" y="120" text-anchor="end" font-family="Geist Mono, monospace" font-size="11" style="fill:var(--fg-mute)">~95% &middot; 1KB</text>
+
+          <!-- 128 (innermost) -->
+          <rect x="60" y="144" width="480" height="38" rx="8" style="fill:var(--bg-elev);stroke:var(--border)"/>
+          <text x="74" y="168" font-family="Geist Mono, monospace" font-size="12" style="fill:var(--fg)">128d</text>
+          <text x="526" y="168" text-anchor="end" font-family="Geist Mono, monospace" font-size="11" style="fill:var(--fg-mute)">~90% text &middot; ~75% audio/image &middot; 0.5KB</text>
+        </g>
+
+        <text x="380" y="240" text-anchor="middle" font-size="12" style="fill:var(--fg-soft)">All four lengths are prefixes of the same 768-d vector. The first 128 dims are a strict prefix of the first 256.</text>
+      </svg>
+    </div>
+    <p class="cap">FIGURE 4 &middot; The shorter vectors are prefixes of the full one. Quality degrades gracefully, not catastrophically.</p>
+
+    <div class="why">
+      <div class="label">WHY THIS MATTERS</div>
+      <p>This is the part that makes the system actually deployable. A shortlist at 128d is six times cheaper to store and much faster to score than the full 768d. You embed your whole corpus at 768d, project to 128d for the ANN index, and only expand the top-K to 768d before reranking. The full precision vector is never moved across the disk for the 99% of candidates that get filtered out.</p>
+    </div>
+  </section>
+
+  <section class="block">
+    <span class="section-tag">WALKTHROUGH &middot; PART 4</span>
+    <h2>Task instructions reshape the vector at inference time</h2>
+    <p>One thing that surprises first-time users of EmbeddingGemma 2 is that the same input, run with different <code>prompt_name</code> values, produces meaningfully different vectors. <code>SearchQuery</code> encodes "I am a question, find the document that answers me." <code>Document</code> encodes "I am a passage, here is what I am about." A symmetric pair, trained jointly, pushes relevant (query, document) pairs together and irrelevant pairs apart. This is the same pattern that was popular in the dense retrieval literature years ago, but the difference is that here the instruction vocabulary is built into the model and you do not need to fine-tune to add a new task.</p>
+
+    <div class="figure">
+      <svg viewBox="0 0 760 220" role="img" aria-label="Query and document prompt names reshape the embedding to make matches cluster.">
+        <text x="20" y="26" font-family="Geist Mono, monospace" font-size="11" letter-spacing="2" style="fill:var(--fg-mute)">PROMPT-CONDITIONED ENCODING</text>
+
+        <!-- Query path -->
+        <g>
+          <rect x="20" y="50" width="100" height="32" rx="6" style="fill:var(--bg-elev);stroke:var(--border)"/>
+          <text x="70" y="71" text-anchor="middle" font-size="12" style="fill:var(--fg)">Query text</text>
+          <text x="20" y="100" font-family="Geist Mono, monospace" font-size="10.5" style="fill:var(--cool)">+ &quot;SearchQuery&quot; prompt</text>
+          <path d="M 120 66 L 175 66" style="stroke:var(--cool);stroke-width:1.4" marker-end="url(#arr3)"/>
+          <rect x="175" y="50" width="120" height="32" rx="6" style="fill:var(--cool-soft);stroke:var(--cool)"/>
+          <text x="235" y="71" text-anchor="middle" font-size="12" style="fill:var(--cool)">EG2 encoder</text>
+          <path d="M 295 66 L 350 66" style="stroke:var(--cool);stroke-width:1.4" marker-end="url(#arr3)"/>
+          <circle cx="380" cy="66" r="6" style="fill:var(--cool)"/>
+        </g>
+        <defs>
+          <marker id="arr3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+            <path d="M0,0 L10,5 L0,10 z" style="fill:var(--cool)"/>
+          </marker>
+        </defs>
+
+        <!-- Document path -->
+        <g>
+          <rect x="20" y="140" width="100" height="32" rx="6" style="fill:var(--bg-elev);stroke:var(--border)"/>
+          <text x="70" y="161" text-anchor="middle" font-size="12" style="fill:var(--fg)">Document</text>
+          <text x="20" y="190" font-family="Geist Mono, monospace" font-size="10.5" style="fill:var(--accent)">+ &quot;Document&quot; prompt</text>
+          <path d="M 120 156 L 175 156" style="stroke:var(--accent);stroke-width:1.4" marker-end="url(#arr4)"/>
+          <rect x="175" y="140" width="120" height="32" rx="6" style="fill:var(--accent-soft);stroke:var(--accent)"/>
+          <text x="235" y="161" text-anchor="middle" font-size="12" style="fill:var(--accent)">EG2 encoder</text>
+          <path d="M 295 156 L 350 156" style="stroke:var(--accent);stroke-width:1.4" marker-end="url(#arr4)"/>
+          <circle cx="380" cy="156" r="6" style="fill:var(--accent)"/>
+        </g>
+        <defs>
+          <marker id="arr4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+            <path d="M0,0 L10,5 L0,10 z" style="fill:var(--accent)"/>
+          </marker>
+        </defs>
+
+        <!-- Pull together -->
+        <g>
+          <line x1="386" y1="66" x2="420" y2="111" style="stroke:var(--fg-mute);stroke-width:1;stroke-dasharray:3 3" opacity="0.7"/>
+          <line x1="386" y1="156" x2="420" y2="111" style="stroke:var(--fg-mute);stroke-width:1;stroke-dasharray:3 3" opacity="0.7"/>
+          <circle cx="430" cy="111" r="14" style="fill:var(--accent-soft);stroke:var(--accent)"/>
+          <text x="430" y="115" text-anchor="middle" font-size="11" font-weight="600" style="fill:var(--accent)">cos</text>
+          <text x="500" y="111" font-size="12" style="fill:var(--fg)">= 0.81 (relevant pair)</text>
+          <text x="500" y="128" font-size="11" style="fill:var(--fg-mute)">= -0.04 (irrelevant pair)</text>
+        </g>
+      </svg>
+    </div>
+    <p class="cap">FIGURE 5 &middot; Query and document prompts are trained to make relevant pairs cluster and irrelevant ones repel.</p>
+
+    <div class="why">
+      <div class="label">WHY THIS MATTERS</div>
+      <p>For retrieval, mixing <code>SearchQuery</code> and <code>Document</code> prompts is the difference between a useful system and a useless one. The model knows that queries and documents live in different halves of the same space, and it has spent training time pushing them apart when they are unrelated and pulling them together when they are related. The right failure mode to remember: if your recall drops, check that you are not accidentally encoding the document with the query prompt.</p>
+    </div>
+  </section>
+
+  <section class="block">
+    <span class="section-tag">WALKTHROUGH &middot; PART 5</span>
+    <h2>The 8K context window is shared across modalities</h2>
+    <p>Every modality feeds the same 8,192-token context. Audio at 16 kHz mono gets roughly 5.5 minutes per call; images get up to 29; video frames up to 58 at one frame per second. The relevant mental model is "tokens of attention" rather than wall-clock time. A long voice memo and a long document cost the same in tokens, and the model decides on its own how to spend them. The interesting consequence is that you can interleave: a product listing with a photo, a short video, and a description becomes one embedding, not three.</p>
+
+    <div class="figure">
+      <svg viewBox="0 0 760 220" role="img" aria-label="8K context window shared across modalities with rate conversions.">
+        <text x="20" y="26" font-family="Geist Mono, monospace" font-size="11" letter-spacing="2" style="fill:var(--fg-mute)">8,192-TOKEN SHARED CONTEXT WINDOW</text>
+
+        <!-- Outer bar -->
+        <rect x="20" y="50" width="720" height="46" rx="8" style="fill:var(--bg-elev);stroke:var(--border)"/>
+        <text x="380" y="78" text-anchor="middle" font-size="13" font-weight="600" style="fill:var(--fg)">8,192 tokens</text>
+
+        <!-- Filled portion showing single-modality use -->
+        <rect x="20" y="50" width="720" height="46" rx="8" style="fill:var(--accent);opacity:0.12"/>
+        <text x="380" y="46" text-anchor="middle" font-family="Geist Mono, monospace" font-size="10" style="fill:var(--fg-mute)">single-modality use: 100% of capacity</text>
+
+        <!-- Conversions -->
+        <g font-family="Geist Mono, monospace" font-size="11" style="fill:var(--fg-soft)">
+          <rect x="20"  y="120" width="110" height="50" rx="8" style="fill:var(--cool-soft);stroke:var(--cool)"/>
+          <text x="75"  y="142" text-anchor="middle" font-size="12" font-weight="600" style="fill:var(--cool)">Audio</text>
+          <text x="75"  y="160" text-anchor="middle" font-size="11" style="fill:var(--fg)">5.5 min</text>
+
+          <rect x="148" y="120" width="110" height="50" rx="8" style="fill:var(--violet-soft);stroke:var(--violet)"/>
+          <text x="203" y="142" text-anchor="middle" font-size="12" font-weight="600" style="fill:var(--violet)">Image</text>
+          <text x="203" y="160" text-anchor="middle" font-size="11" style="fill:var(--fg)">29 imgs</text>
+
+          <rect x="276" y="120" width="110" height="50" rx="8" style="fill:var(--warm-soft);stroke:var(--warm)"/>
+          <text x="331" y="142" text-anchor="middle" font-size="12" font-weight="600" style="fill:var(--warm)">Video</text>
+          <text x="331" y="160" text-anchor="middle" font-size="11" style="fill:var(--fg)">58 frames</text>
+
+          <rect x="404" y="120" width="120" height="50" rx="8" style="fill:var(--accent-soft);stroke:var(--accent)"/>
+          <text x="464" y="142" text-anchor="middle" font-size="12" font-weight="600" style="fill:var(--accent)">Text</text>
+          <text x="464" y="160" text-anchor="middle" font-size="11" style="fill:var(--fg)">~6k words</text>
+
+          <rect x="542" y="120" width="200" height="50" rx="8" style="fill:var(--bg-elev);stroke:var(--border)"/>
+          <text x="642" y="142" text-anchor="middle" font-size="12" font-weight="600" style="fill:var(--fg)">Interleaved mix</text>
+          <text x="642" y="160" text-anchor="middle" font-size="11" style="fill:var(--fg-mute)">any combination</text>
+        </g>
+
+        <text x="380" y="200" text-anchor="middle" font-size="12" style="fill:var(--fg-soft)">Sample rates are fixed: audio at 16 kHz mono, video at 1 fps. Above those rates, the context fills faster.</text>
+      </svg>
+    </div>
+    <p class="cap">FIGURE 6 &middot; Modality-specific rates decide how the shared 8K token budget gets spent.</p>
+
+    <div class="why">
+      <div class="label">WHY THIS MATTERS</div>
+      <p>For RAG, the context window determines how much you can pre-pend to a query. For multimodal retrieval, it is the unit of "how rich can one embedding be". A single 8K embedding that holds text, an image, and a 30-second video clip is qualitatively different from three separate 768-d vectors you have to fuse yourself. The model has done the fusion during encoding; the index stores the result.</p>
+    </div>
+  </section>
+
+  <!-- ============== SECTION 4: COMMON CONFUSIONS ============== -->
+
+  <section class="block">
+    <span class="section-tag">COMMON CONFUSIONS</span>
+    <h2>Four things people get wrong the first time</h2>
+
+    <div class="conf-grid">
+
+      <div class="conf-card">
+        <div class="head">
+          <span class="num mono">01</span>
+          <span class="wrong">"Truncating the vector means throwing away information, so it is always worse."</span>
+        </div>
+        <p class="right">A <strong>Matryoshka-trained</strong> vector is not a generic vector that got chopped. The first 128 dims were chosen during training to carry the bulk of the signal; the remaining 640 dims are residual refinement. For text and code you keep about 90% of the quality at 128d, and for image, video, and audio you keep about 75%. That is the same recall curve a 6x larger random vector would give you, and it is much better than the obvious comparison.</p>
+      </div>
+
+      <div class="conf-card">
+        <div class="head">
+          <span class="num mono">02</span>
+          <span class="wrong">"Four encoders mean four embedding spaces, so I still have to bridge them at query time."</span>
+        </div>
+        <p class="right">No. The encoders are trained to project into the same 768-d space, so a text vector, an image vector, and an audio vector are directly comparable. There is no projection matrix at query time, no shared anchor embedding, no contrastive fine-tune on your data. The model was trained to align them, and the alignment is the whole product. You compute cosine similarity and that is it.</p>
+      </div>
+
+      <div class="conf-card">
+        <div class="head">
+          <span class="num mono">03</span>
+          <span class="wrong">"Bigger is always better, so I should ship the 740M model even for text RAG."</span>
+        </div>
+        <p class="right">For text-only workloads, the 270M configuration is <strong>best-in-class for its size</strong> and matches or beats much larger models on MTEB. The 170M vision encoder and 300M audio encoder are not free; they cost RAM, latency, and battery. The right question is which modalities you actually need at query time, not which modalities you might want someday. If you only do text, ship 270M.</p>
+      </div>
+
+      <div class="conf-card">
+        <div class="head">
+          <span class="num mono">04</span>
+          <span class="wrong">"Task instructions are a hack for prompt engineering."</span>
+        </div>
+        <p class="right">The model was trained with a vocabulary of task instructions baked in, and switching <code>prompt_name</code> between <code>SearchQuery</code> and <code>Document</code> produces two different vectors that the model has been explicitly optimized to compare. This is a trained behavior, not a prompt-engineering trick. The right mental model: the same encoder, conditioned on a task, lives in a different region of the same space, and the training objective made sure that the regions line up where they should.</p>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ============== SECTION 5: WHERE TO GO NEXT ============== -->
+
+  <section class="block">
+    <span class="section-tag">WHERE TO GO NEXT</span>
+    <h2>Three places to go from here</h2>
+
+    <ul class="next-list">
+      <li><span class="arrow">&rarr;</span><span><a href="https://arxiv.org/abs/2205.13147" target="_blank" rel="noopener">Matryoshka Representation Learning</a> <span class="why-link mono">(Kusupati et al. 2022)</span> &middot; the paper that makes truncation a first-class design choice rather than a degradation.</span></li>
+      <li><span class="arrow">&rarr;</span><span><a href="https://huggingface.co/google/embeddinggemma-2" target="_blank" rel="noopener">Hugging Face model card for EmbeddingGemma 2</a> <span class="why-link mono">(google/embeddinggemma-2)</span> &middot; weights, eval tables, and per-modality benchmark numbers in one place.</span></li>
+      <li><span class="arrow">&rarr;</span><span><a href="https://developers.googleblog.com/embeddinggemma-2-the-developer-guide/" target="_blank" rel="noopener">The developer guide on Google Developers blog</a> &middot; canonical <code>sentence-transformers</code> snippets for the four modular loadouts and the Matryoshka truncation call.</span></li>
+    </ul>
+  </section>
+
+  <!-- ============== SOURCES ============== -->
+  <div class="sources">
+    <div class="label">SOURCES</div>
+    <ol>
+      <li><a href="https://blog.google/innovation-and-ai/technology/developers-tools/embeddinggemma-2/" target="_blank" rel="noopener">EmbeddingGemma 2 launch post (Google blog, Oct 6 2026)</a></li>
+      <li><a href="https://developers.googleblog.com/embeddinggemma-2-the-developer-guide/" target="_blank" rel="noopener">EmbeddingGemma 2 developer guide (Google Developers blog, Oct 6 2026)</a></li>
+      <li><a href="https://ollama.com/library/embeddinggemma-2" target="_blank" rel="noopener">EmbeddingGemma 2 on Ollama</a> &middot; confirms 270M / 440M / 570M / 740M modular loadouts and the shared 768-d space.</li>
+      <li><a href="https://arxiv.org/abs/2205.13147" target="_blank" rel="noopener">Matryoshka Representation Learning</a> (Kusupati et al., 2022)</li>
+      <li><a href="https://hn.algolia.com/api/v1/search?tags=story&query=EmbeddingGemma+2" target="_blank" rel="noopener">Hacker News discussion of EmbeddingGemma 2</a> (top story 313 pts, Oct 6 2026)</li>
+    </ol>
+  </div>
+
+  <footer class="bot">
+    <p>Day 11 of the explainer series. Built by Hermes using the explainer-builder skill. Sources are inline, numbers come from the EmbeddingGemma 2 launch and developer guide (Google, October 6 2026) and the Matryoshka paper unless tagged otherwise. The HN reception score is from the public Algolia index as of run time.</p>
+  </footer>
+
+</main>
+
+<script>
+  // Theme toggle
+  (function () {
+    var btn = document.getElementById('themeBtn');
+    var icoL = document.getElementById('icoLight');
+    var icoD = document.getElementById('icoDark');
+    function paint() {
+      var t = document.documentElement.getAttribute('data-theme');
+      if (t === 'dark') { icoL.style.display = 'inline-block'; icoD.style.display = 'none'; }
+      else { icoL.style.display = 'none'; icoD.style.display = 'inline-block'; }
+    }
+    paint();
+    btn.addEventListener('click', function () {
+      var cur = document.documentElement.getAttribute('data-theme') || 'light';
+      var nxt = cur === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', nxt);
+      try { localStorage.setItem('hermes-theme', nxt); } catch (e) {}
+      paint();
+    });
+  })();
+</script>
+
+</body>
+</html>
