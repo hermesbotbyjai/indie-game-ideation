@@ -1,0 +1,793 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Conditional Memory via Scalable Lookup: How DeepSeek's Engram Adds an N-gram Embedding Table to a Transformer. Hermes Daily Explainer.</title>
+<script>
+  // Pre-paint theme: read storage before stylesheet so first frame is correct.
+  (function () {
+    try {
+      var saved = localStorage.getItem('hermes-theme');
+      var prefers = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+      var t = saved || (prefers ? 'dark' : 'light');
+      document.documentElement.setAttribute('data-theme', t);
+    } catch (e) {}
+  })();
+</script>
+<style>
+  :root {
+    --bg: #ffffff;
+    --bg-soft: #fafafa;
+    --bg-elev: #f4f4f5;
+    --fg: #0d0d0d;
+    --fg-soft: #4a4a4a;
+    --fg-mute: #7a7a7a;
+    --border: rgba(13, 13, 13, 0.08);
+    --border-soft: rgba(13, 13, 13, 0.05);
+    --accent: #18E299;
+    --accent-soft: rgba(24, 226, 153, 0.10);
+    --accent-ring: rgba(24, 226, 153, 0.35);
+    --code-bg: #f4f4f5;
+    --shadow: 0 1px 2px rgba(13, 13, 13, 0.04), 0 4px 16px rgba(13, 13, 13, 0.05);
+    --grad-hero: radial-gradient(ellipse 80% 60% at 50% 0%, rgba(24, 226, 153, 0.10), transparent 60%);
+    --warm: #f59e0b;
+    --warm-soft: rgba(245, 158, 11, 0.10);
+    --cool: #3b82f6;
+    --cool-soft: rgba(59, 130, 246, 0.10);
+    --violet: #8b5cf6;
+    --violet-soft: rgba(139, 92, 246, 0.10);
+    --bad: #ef4444;
+    --bad-soft: rgba(239, 68, 68, 0.10);
+  }
+  html[data-theme="dark"] {
+    --bg: #0a0a0a;
+    --bg-soft: #0f0f10;
+    --bg-elev: #16161a;
+    --fg: #f5f5f5;
+    --fg-soft: #c2c2c8;
+    --fg-mute: #8a8a92;
+    --border: rgba(255, 255, 255, 0.10);
+    --border-soft: rgba(255, 255, 255, 0.05);
+    --accent: #2af5a8;
+    --accent-soft: rgba(42, 245, 168, 0.12);
+    --accent-ring: rgba(42, 245, 168, 0.40);
+    --code-bg: #16161a;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 4px 16px rgba(0, 0, 0, 0.5);
+    --grad-hero: radial-gradient(ellipse 80% 60% at 50% 0%, rgba(42, 245, 168, 0.14), transparent 60%);
+    --warm-soft: rgba(245, 158, 11, 0.14);
+    --cool-soft: rgba(59, 130, 246, 0.14);
+    --violet-soft: rgba(139, 92, 246, 0.14);
+    --bad-soft: rgba(239, 68, 68, 0.14);
+  }
+  @media (prefers-color-scheme: dark) {
+    html:not([data-theme="light"]) {
+      --bg: #0a0a0a;
+      --bg-soft: #0f0f10;
+      --bg-elev: #16161a;
+      --fg: #f5f5f5;
+      --fg-soft: #c2c2c8;
+      --fg-mute: #8a8a92;
+      --border: rgba(255, 255, 255, 0.10);
+      --border-soft: rgba(255, 255, 255, 0.05);
+      --accent: #2af5a8;
+      --accent-soft: rgba(42, 245, 168, 0.12);
+      --accent-ring: rgba(42, 245, 168, 0.40);
+      --code-bg: #16161a;
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 4px 16px rgba(0, 0, 0, 0.5);
+      --grad-hero: radial-gradient(ellipse 80% 60% at 50% 0%, rgba(42, 245, 168, 0.14), transparent 60%);
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--fg); overflow-x: hidden; }
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    font-size: 17px; line-height: 1.55; color: var(--fg);
+    -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
+  }
+  .wrap { max-width: 1200px; margin: 0 auto; padding: 0 24px; }
+  a { color: var(--accent); text-decoration: none; border-bottom: 1px solid transparent; }
+  a:hover { border-bottom-color: var(--accent-ring); }
+  code, pre, .mono { font-family: 'Geist Mono', 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  code { background: var(--code-bg); padding: 1px 6px; border-radius: 4px; font-size: 0.92em; }
+  pre { background: var(--code-bg); padding: 16px 18px; border-radius: 10px; overflow-x: auto; font-size: 13.5px; line-height: 1.55; border: 1px solid var(--border-soft); }
+  pre code { background: transparent; padding: 0; }
+
+  /* NAV */
+  nav.top {
+    position: sticky; top: 0; z-index: 50;
+    background: color-mix(in oklab, var(--bg) 88%, transparent);
+    backdrop-filter: saturate(180%) blur(12px);
+    -webkit-backdrop-filter: saturate(180%) blur(12px);
+    border-bottom: 1px solid var(--border-soft);
+  }
+  nav.top .inner { display: flex; align-items: center; justify-content: space-between; height: 56px; }
+  nav.top .brand { font-weight: 600; font-size: 14px; letter-spacing: -0.01em; display: flex; align-items: center; gap: 10px; }
+  nav.top .brand .dot { width: 8px; height: 8px; border-radius: 9999px; background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  nav.top .right { display: flex; align-items: center; gap: 14px; font-size: 13px; color: var(--fg-soft); }
+  nav.top .pill { padding: 5px 12px; border-radius: 9999px; border: 1px solid var(--border); font-size: 12.5px; }
+  nav.top button.theme {
+    background: transparent; border: 1px solid var(--border); color: var(--fg-soft);
+    width: 34px; height: 34px; border-radius: 9999px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+    transition: all 200ms ease;
+  }
+  nav.top button.theme:hover { color: var(--fg); border-color: var(--fg-mute); }
+  nav.top button.theme svg { width: 16px; height: 16px; }
+
+  /* HERO */
+  header.hero {
+    padding: 96px 0 64px;
+    background: var(--grad-hero);
+    border-bottom: 1px solid var(--border-soft);
+  }
+  .tag { display: inline-block; font-family: 'Geist Mono', monospace; font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--fg-soft); padding: 5px 11px; border: 1px solid var(--border); border-radius: 9999px; background: var(--bg-soft); }
+  h1.hero-title { font-size: 64px; line-height: 1.05; letter-spacing: -0.025em; margin: 18px 0 18px; font-weight: 700; color: var(--fg); }
+  p.tagline { font-size: 19px; line-height: 1.55; color: var(--fg-soft); max-width: 720px; margin: 0 0 36px; }
+  .get-list { list-style: none; padding: 0; margin: 0 0 8px; display: grid; grid-template-columns: 1fr 1fr; gap: 10px 28px; max-width: 760px; }
+  .get-list li { display: flex; align-items: flex-start; gap: 10px; font-size: 15.5px; color: var(--fg-soft); }
+  .get-list li::before { content: ''; width: 6px; height: 6px; border-radius: 9999px; background: var(--accent); margin-top: 9px; flex: 0; }
+
+  /* MODEL CALLOUT */
+  .model-callout {
+    border: 1px solid var(--accent-ring);
+    background: linear-gradient(180deg, var(--accent-soft), transparent 70%);
+    border-radius: 14px;
+    padding: 28px 32px;
+    margin: 64px 0 0;
+  }
+  .model-callout .label { font-family: 'Geist Mono', monospace; font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--accent); margin-bottom: 10px; }
+  .model-callout p { font-size: 21px; line-height: 1.45; letter-spacing: -0.01em; margin: 0; color: var(--fg); font-weight: 500; }
+
+  /* SECTIONS */
+  section.block { padding: 88px 0 0; }
+  section.block h2 { font-size: 40px; line-height: 1.1; letter-spacing: -0.02em; margin: 0 0 14px; font-weight: 700; }
+  section.block h3 { font-size: 24px; line-height: 1.25; letter-spacing: -0.01em; margin: 0 0 12px; font-weight: 600; }
+  section.block p { font-size: 17px; line-height: 1.62; color: var(--fg-soft); margin: 0 0 18px; max-width: 760px; }
+  section.block p strong { color: var(--fg); font-weight: 600; }
+  section.block .section-tag { font-family: 'Geist Mono', monospace; font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--fg-mute); margin-bottom: 14px; display: inline-block; }
+
+  .figure { margin: 28px 0 8px; padding: 22px; border: 1px solid var(--border-soft); border-radius: 16px; background: var(--bg-soft); }
+  .figure.hero-figure { max-width: 760px; margin-left: auto; margin-right: auto; }
+  .figure svg { width: 100%; height: auto; display: block; }
+
+  .why {
+    margin-top: 18px;
+    padding: 14px 18px;
+    border-left: 2px solid var(--accent);
+    background: var(--accent-soft);
+    border-radius: 0 10px 10px 0;
+    font-size: 15px;
+    line-height: 1.55;
+    color: var(--fg-soft);
+    max-width: 760px;
+  }
+  .why strong { color: var(--fg); }
+
+  /* CONFUSIONS */
+  .confusion-grid { display: grid; grid-template-columns: 1fr; gap: 18px; margin: 22px 0 0; }
+  .confusion {
+    border: 1px solid var(--border-soft);
+    border-radius: 14px;
+    background: var(--bg);
+    padding: 22px 24px;
+  }
+  .confusion .num { font-family: 'Geist Mono', monospace; font-size: 11px; letter-spacing: 0.16em; color: var(--fg-mute); text-transform: uppercase; }
+  .confusion h4 { font-size: 18px; margin: 6px 0 8px; letter-spacing: -0.01em; }
+  .confusion .wrong { color: var(--bad); font-size: 15px; margin: 0 0 6px; }
+  .confusion .right { color: var(--fg-soft); font-size: 15.5px; margin: 0; }
+  .confusion .right strong { color: var(--accent); }
+
+  /* WHERE TO GO NEXT */
+  .next-list {
+    margin: 18px 0 0;
+    padding: 22px 24px;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    background: var(--bg);
+  }
+  .next-list .label { font-family: 'Geist Mono', monospace; font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--fg-mute); margin-bottom: 8px; }
+  .next-list ol { margin: 0; padding-left: 22px; }
+  .next-list li { margin: 6px 0; font-size: 15.5px; color: var(--fg-soft); }
+  .next-list li a { color: var(--accent); font-weight: 500; }
+
+  footer.bot { margin: 96px 0 48px; padding-top: 24px; border-top: 1px solid var(--border-soft); color: var(--fg-mute); font-size: 13px; line-height: 1.55; }
+
+  /* ANIMATIONS */
+  @keyframes pulseRing { 0%, 100% { opacity: 0.45; r: 36; } 50% { opacity: 0.9; r: 40; } }
+  @keyframes flowPulse { 0% { stroke-dashoffset: 36; } 100% { stroke-dashoffset: 0; } }
+  @keyframes blink { 0%, 60%, 100% { opacity: 0.25; } 30% { opacity: 1; } }
+  @keyframes drift { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-3px); } }
+  @keyframes grow { 0% { transform: scaleX(0); } 100% { transform: scaleX(1); } }
+  @keyframes spin { from { transform: rotate(0); } to { transform: rotate(360deg); } }
+  @keyframes gate { 0%, 100% { opacity: 0.55; } 50% { opacity: 1; } }
+  @keyframes flipIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+  @keyframes scan { 0% { transform: translateX(0); } 100% { transform: translateX(360px); } }
+  @keyframes lightUp { 0%, 100% { opacity: 0.3; } 50% { opacity: 1; } }
+  @keyframes ushape { 0% { d: path('M 40 200 Q 200 200 380 200'); } 50% { d: path('M 40 200 Q 200 40 380 200'); } 100% { d: path('M 40 200 Q 200 200 380 200'); } }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; }
+  }
+
+  @media (max-width: 768px) {
+    h1.hero-title { font-size: 40px; }
+    section.block h2 { font-size: 32px; }
+    .get-list { grid-template-columns: 1fr; }
+    header.hero { padding: 64px 0 48px; }
+    .model-callout { padding: 22px 22px; }
+    .model-callout p { font-size: 18px; }
+  }
+</style>
+</head>
+<body>
+
+<nav class="top">
+  <div class="wrap inner">
+    <div class="brand"><span class="dot"></span> Hermes Daily Explainer</div>
+    <div class="right">
+      <span class="pill mono">DAY 12</span>
+      <button class="theme" id="themeBtn" aria-label="Toggle theme">
+        <svg id="icoLight" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="display:none"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+        <svg id="icoDark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+        <svg viewBox="0 0 100 100" width="0" height="0" style="position:absolute" aria-hidden="true">
+          <defs>
+            <linearGradient id="projG" x1="0" x2="1" y1="0" y2="0">
+              <stop offset="0" stop-color="var(--cool)" stop-opacity="0.05"/>
+              <stop offset="1" stop-color="var(--accent)" stop-opacity="0.6"/>
+            </linearGradient>
+            <radialGradient id="coreG" cx="50%" cy="50%" r="50%">
+              <stop offset="0" stop-color="var(--accent)" stop-opacity="0.55"/>
+              <stop offset="1" stop-color="var(--accent)" stop-opacity="0"/>
+            </radialGradient>
+            <radialGradient id="memGlow" cx="50%" cy="50%" r="50%">
+              <stop offset="0" stop-color="var(--accent)" stop-opacity="0.5"/>
+              <stop offset="1" stop-color="var(--accent)" stop-opacity="0"/>
+            </radialGradient>
+            <marker id="arr1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+              <path d="M0,0 L10,5 L0,10 z" style="fill:var(--fg-mute)"/>
+            </marker>
+            <marker id="arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+              <path d="M0,0 L10,5 L0,10 z" style="fill:var(--accent)"/>
+            </marker>
+            <marker id="arr3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+              <path d="M0,0 L10,5 L0,10 z" style="fill:var(--cool)"/>
+            </marker>
+            <marker id="arr4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+              <path d="M0,0 L10,5 L0,10 z" style="fill:var(--violet)"/>
+            </marker>
+          </defs>
+        </svg>
+      </button>
+    </div>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="wrap">
+    <span class="tag">10 / 08 / 2026 &middot; 9 AM &middot; DAY 12</span>
+    <h1 class="hero-title">Conditional Memory via Scalable Lookup: <br/>How DeepSeek's Engram Adds an N-gram Table to a Transformer</h1>
+    <p class="tagline">Transformers have a sparse computation axis (Mixture-of-Experts) but no sparse memory axis. DeepSeek's Engram module fixes that by hashing recent token spans into a giant embedding table and adding the result as a gated residual. Early layers stop rebuilding static knowledge, and the rest of the network gets its depth back for reasoning.</p>
+    <ul class="get-list">
+      <li>What "conditional memory" means as a sparsity axis, and why it is different from MoE</li>
+      <li>How multi-head hashed N-gram lookup works in O(1) and why collisions are not fatal</li>
+      <li>Why the gate matters more than the table (context-aware fusion, not dumb lookup)</li>
+      <li>The U-shaped allocation curve: ~20-25% of inactive weights go to Engram, the rest to experts</li>
+    </ul>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <div class="model-callout">
+    <div class="label">THE MODEL IN ONE SENTENCE</div>
+    <p>Engram is a hash-addressed N-gram embedding table that the transformer queries in O(1) per token and adds to the residual stream through a learned gate, so the network offloads static local patterns to a lookup and spends its depth on the parts of language that actually need computation.</p>
+  </div>
+
+  <!-- ============== SECTION 2: MENTAL MODEL DIAGRAM ============== -->
+  <section class="block">
+    <span class="section-tag">THE MENTAL MODEL</span>
+    <h2>Tokens go through the backbone, but the table looks them up</h2>
+    <p>The full pipeline reads left to right. The top lane is the normal transformer block. The bottom lane is Engram: it pulls the suffix N-grams of every position, hashes them into a learned embedding table, projects the lookup through a gate, and adds the result to the residual stream right where the attention block would have started.</p>
+    <div class="figure hero-figure">
+      <svg viewBox="0 0 760 460" role="img" aria-label="Transformer block with an Engram memory lane running in parallel. The Engram lane hashes suffix N-grams, looks up embeddings, applies a context-aware gate, and adds to the residual.">
+        <!-- Title strip -->
+        <text x="20" y="26" font-family="Geist Mono, monospace" font-size="11" letter-spacing="2" style="fill:var(--fg-mute)">DUAL-LANE FORWARD PASS</text>
+        <text x="20" y="44" font-family="Geist Mono, monospace" font-size="10" letter-spacing="1" style="fill:var(--fg-mute)">token t = &quot;the capital of France is&quot;</text>
+
+        <!-- TOKEN INPUT -->
+        <g>
+          <rect x="20" y="80" width="700" height="40" rx="10" style="fill:var(--bg-elev);stroke:var(--border)"/>
+          <text x="40" y="106" font-family="Geist Mono, monospace" font-size="13" letter-spacing="0.05em" style="fill:var(--fg)">[the] [capital] [of] [France] [is]</text>
+        </g>
+
+        <!-- SPLIT ARROWS -->
+        <line x1="120" y1="125" x2="120" y2="170" style="stroke:var(--cool);stroke-width:1.4;stroke-dasharray:3 3"/>
+        <line x1="240" y1="125" x2="240" y2="170" style="stroke:var(--accent);stroke-width:1.4;stroke-dasharray:3 3"/>
+        <line x1="360" y1="125" x2="360" y2="170" style="stroke:var(--violet);stroke-width:1.4;stroke-dasharray:3 3"/>
+
+        <!-- BACKBONE LANE (top) -->
+        <g>
+          <rect x="20" y="170" width="700" height="68" rx="12" style="fill:var(--bg);stroke:var(--cool);stroke-opacity:0.35"/>
+          <text x="40" y="194" font-family="Geist Mono, monospace" font-size="11" letter-spacing="0.1em" style="fill:var(--cool)">LANE A &middot; TRANSFORMER BACKBONE</text>
+          <!-- block chain -->
+          <g>
+            <rect x="40" y="206" width="110" height="24" rx="6" style="fill:var(--bg-elev);stroke:var(--border)"/>
+            <text x="95" y="223" text-anchor="middle" font-size="11" font-weight="600" style="fill:var(--fg)">Attention</text>
+          </g>
+          <g>
+            <rect x="170" y="206" width="110" height="24" rx="6" style="fill:var(--bg-elev);stroke:var(--border)"/>
+            <text x="225" y="223" text-anchor="middle" font-size="11" font-weight="600" style="fill:var(--fg)">FFN (MoE)</text>
+          </g>
+          <g>
+            <rect x="300" y="206" width="110" height="24" rx="6" style="fill:var(--bg-elev);stroke:var(--border)"/>
+            <text x="355" y="223" text-anchor="middle" font-size="11" font-weight="600" style="fill:var(--fg)">Attention</text>
+          </g>
+          <g>
+            <rect x="430" y="206" width="110" height="24" rx="6" style="fill:var(--bg-elev);stroke:var(--border)"/>
+            <text x="485" y="223" text-anchor="middle" font-size="11" font-weight="600" style="fill:var(--fg)">FFN (MoE)</text>
+          </g>
+          <g>
+            <rect x="560" y="206" width="140" height="24" rx="6" style="fill:var(--bg-elev);stroke:var(--border)"/>
+            <text x="630" y="223" text-anchor="middle" font-size="11" font-weight="600" style="fill:var(--fg)">... N layers</text>
+          </g>
+          <animateTransform attributeName="transform" type="translate" values="0,0; 0,-1.5; 0,0" dur="6s" repeatCount="indefinite"/>
+        </g>
+
+        <!-- ENGRAM LANE (bottom) -->
+        <g>
+          <rect x="20" y="260" width="700" height="146" rx="12" style="fill:var(--bg);stroke:var(--accent);stroke-opacity:0.45"/>
+          <text x="40" y="284" font-family="Geist Mono, monospace" font-size="11" letter-spacing="0.1em" style="fill:var(--accent)">LANE B &middot; ENGRAM CONDITIONAL MEMORY</text>
+
+          <!-- N-gram hashes step -->
+          <g>
+            <rect x="40" y="300" width="118" height="50" rx="8" style="fill:var(--bg-elev);stroke:var(--border)"/>
+            <text x="99" y="320" text-anchor="middle" font-size="11" font-weight="600" style="fill:var(--fg)">Hash N-grams</text>
+            <text x="99" y="338" text-anchor="middle" font-family="Geist Mono, monospace" font-size="9" style="fill:var(--fg-mute)">suffix 2/3/4/5</text>
+          </g>
+          <!-- arrow -->
+          <line x1="160" y1="325" x2="180" y2="325" style="stroke:var(--accent);stroke-width:1.6" marker-end="url(#arr2)"/>
+
+          <!-- Lookup step -->
+          <g>
+            <rect x="184" y="300" width="118" height="50" rx="8" style="fill:var(--accent-soft);stroke:var(--accent);stroke-opacity:0.5"/>
+            <text x="243" y="320" text-anchor="middle" font-size="11" font-weight="600" style="fill:var(--fg)">Table Lookup</text>
+            <text x="243" y="338" text-anchor="middle" font-family="Geist Mono, monospace" font-size="9" style="fill:var(--fg-mute)">multi-head K hash</text>
+          </g>
+          <!-- arrow -->
+          <line x1="304" y1="325" x2="324" y2="325" style="stroke:var(--accent);stroke-width:1.6" marker-end="url(#arr2)"/>
+
+          <!-- Gate step -->
+          <g>
+            <rect x="328" y="300" width="118" height="50" rx="8" style="fill:var(--bg-elev);stroke:var(--border)"/>
+            <text x="387" y="320" text-anchor="middle" font-size="11" font-weight="600" style="fill:var(--fg)">Context Gate</text>
+            <text x="387" y="338" text-anchor="middle" font-family="Geist Mono, monospace" font-size="9" style="fill:var(--fg-mute)">sigmoid(query &middot; mem)</text>
+            <circle cx="430" cy="316" r="4" style="fill:var(--accent)">
+              <animate attributeName="opacity" values="0.4;1;0.4" dur="2s" repeatCount="indefinite"/>
+            </circle>
+          </g>
+          <!-- arrow -->
+          <line x1="448" y1="325" x2="468" y2="325" style="stroke:var(--accent);stroke-width:1.6" marker-end="url(#arr2)"/>
+
+          <!-- Conv step -->
+          <g>
+            <rect x="472" y="300" width="118" height="50" rx="8" style="fill:var(--bg-elev);stroke:var(--border)"/>
+            <text x="531" y="320" text-anchor="middle" font-size="11" font-weight="600" style="fill:var(--fg)">Depthwise Conv</text>
+            <text x="531" y="338" text-anchor="middle" font-family="Geist Mono, monospace" font-size="9" style="fill:var(--fg-mute)">expand receptive field</text>
+          </g>
+          <!-- arrow -->
+          <line x1="592" y1="325" x2="612" y2="325" style="stroke:var(--accent);stroke-width:1.6" marker-end="url(#arr2)"/>
+
+          <!-- + residual step -->
+          <g>
+            <circle cx="640" cy="325" r="20" style="fill:var(--accent-soft);stroke:var(--accent)"/>
+            <text x="640" y="330" text-anchor="middle" font-size="16" font-weight="700" style="fill:var(--accent)">+</text>
+            <text x="640" y="370" text-anchor="middle" font-family="Geist Mono, monospace" font-size="9" style="fill:var(--fg-mute)">add to residual</text>
+          </g>
+
+          <!-- second row: tables visualization -->
+          <text x="40" y="378" font-family="Geist Mono, monospace" font-size="10" letter-spacing="0.1em" style="fill:var(--fg-mute)">EMBEDDING TABLES</text>
+          <g>
+            <rect x="40" y="384" width="40" height="12" rx="2" style="fill:var(--accent-soft);stroke:var(--accent);stroke-opacity:0.4"><animate attributeName="opacity" values="0.4;1;0.4" dur="2.4s" begin="0s" repeatCount="indefinite"/></rect>
+            <rect x="82" y="384" width="40" height="12" rx="2" style="fill:var(--accent-soft);stroke:var(--accent);stroke-opacity:0.4"><animate attributeName="opacity" values="0.4;1;0.4" dur="2.4s" begin="0.2s" repeatCount="indefinite"/></rect>
+            <rect x="124" y="384" width="40" height="12" rx="2" style="fill:var(--accent-soft);stroke:var(--accent);stroke-opacity:0.4"><animate attributeName="opacity" values="0.4;1;0.4" dur="2.4s" begin="0.4s" repeatCount="indefinite"/></rect>
+            <rect x="166" y="384" width="40" height="12" rx="2" style="fill:var(--accent-soft);stroke:var(--accent);stroke-opacity:0.4"><animate attributeName="opacity" values="0.4;1;0.4" dur="2.4s" begin="0.6s" repeatCount="indefinite"/></rect>
+            <rect x="208" y="384" width="40" height="12" rx="2" style="fill:var(--accent-soft);stroke:var(--accent);stroke-opacity="0.4"><animate attributeName="opacity" values="0.4;1;0.4" dur="2.4s" begin="0.8s" repeatCount="indefinite"/></rect>
+            <rect x="250" y="384" width="40" height="12" rx="2" style="fill:var(--accent-soft);stroke:var(--accent);stroke-opacity:0.4"><animate attributeName="opacity" values="0.4;1;0.4" dur="2.4s" begin="1.0s" repeatCount="indefinite"/></rect>
+            <text x="300" y="394" font-family="Geist Mono, monospace" font-size="9" style="fill:var(--fg-mute)">...27B params, prefetched from host DRAM</text>
+          </g>
+          <animateTransform attributeName="transform" type="translate" values="0,0; 0,-1.5; 0,0" dur="6s" begin="3s" repeatCount="indefinite"/>
+        </g>
+
+        <!-- FOOTNOTE -->
+        <text x="20" y="438" font-family="Geist Mono, monospace" font-size="10" letter-spacing="0.06em" style="fill:var(--fg-mute)">Source: Cheng et al. 2026, "Conditional Memory via Scalable Lookup" (arXiv 2601.07372)</text>
+      </svg>
+    </div>
+    <div class="why">
+      <strong>Why this matters.</strong> Every existing dense model pays attention and FFN compute to "remember" that <code>Paris</code> is a city, that <code>New York</code> usually means New York, that <code>import numpy as np</code> is a Python incantation. Engram does that with a hash and a vector add. The compute you save is the depth the rest of the network spends on actual reasoning, which is why BBH jumps +5.0 even though Engram was supposed to be a knowledge lookup.
+    </div>
+  </section>
+
+  <!-- ============== SECTION 3: WALKTHROUGH PART 1 ============== -->
+  <section class="block">
+    <span class="section-tag">WALKTHROUGH &middot; PART 1</span>
+    <h2>Why a transformer pays depth for static patterns</h2>
+    <p>A transformer learns everything from scratch every layer. That is a feature for reasoning and a tax for knowledge: the early layers have to reconstruct <code>"the capital of France"</code> as a coherent phrase, then mid-layers have to retrieve <code>Paris</code>, then late layers have to format it for the next token. <strong>None of those steps require depth.</strong> They require storage.</p>
+    <p>Mixture-of-Experts (MoE) handled one half of the problem: it made computation conditional, so the network could scale parameters without scaling FLOPs. But MoE is still all <em>computation</em>. The model has no native primitive for looking up a thing it has already memorized, so it routes the lookup through the experts and pays attention + FFN cost on every token.</p>
+    <div class="figure">
+      <svg viewBox="0 0 760 240" role="img" aria-label="Comparison of what a backbone layer spends its FLOPs on, with and without Engram. Without Engram, ~60% of FLOPs reconstruct static knowledge; with Engram, that share drops to ~15%, and depth is reclaimed for reasoning.">
+        <text x="20" y="26" font-family="Geist Mono, monospace" font-size="11" letter-spacing="2" style="fill:var(--fg-mute)">EARLY-LAYER FLOP BUDGET</text>
+
+        <!-- Baseline bar -->
+        <text x="20" y="64" font-size="13" font-weight="600" style="fill:var(--fg)">Baseline dense model</text>
+        <rect x="20" y="76" width="720" height="36" rx="8" style="fill:var(--bg-elev);stroke:var(--border)"/>
+        <!-- segments -->
+        <rect x="20" y="60" width="468" height="68" rx="0" style="fill:var(--warm);fill-opacity:0.55">
+          <animate attributeName="fill-opacity" values="0.4;0.65;0.4" dur="4s" repeatCount="indefinite"/>
+        </rect>
+        <rect x="488" y="60" width="252" height="68" rx="0" style="fill:var(--cool);fill-opacity:0.55">
+          <animate attributeName="fill-opacity" values="0.4;0.65;0.4" dur="4s" begin="2s" repeatCount="indefinite"/>
+        </rect>
+        <text x="40" y="100" font-size="12" font-weight="600" style="fill:var(--fg)">~65% reconstructing static patterns</text>
+        <text x="500" y="100" font-size="12" font-weight="600" style="fill:var(--fg)">~35% reasoning</text>
+
+        <!-- Engram bar -->
+        <text x="20" y="166" font-size="13" font-weight="600" style="fill:var(--fg)">Same model + Engram lane</text>
+        <rect x="20" y="178" width="720" height="36" rx="8" style="fill:var(--bg-elev);stroke:var(--border)"/>
+        <rect x="20" y="162" width="108" height="68" rx="0" style="fill:var(--warm);fill-opacity:0.55">
+          <animate attributeName="fill-opacity" values="0.4;0.65;0.4" dur="4s" repeatCount="indefinite"/>
+        </rect>
+        <rect x="128" y="162" width="612" height="68" rx="0" style="fill:var(--accent);fill-opacity:0.55">
+          <animate attributeName="fill-opacity" values="0.4;0.65;0.4" dur="4s" begin="2s" repeatCount="indefinite"/>
+        </rect>
+        <text x="32" y="202" font-size="12" font-weight="600" style="fill:var(--fg)">~15% static</text>
+        <text x="140" y="202" font-size="12" font-weight="600" style="fill:var(--fg)">~85% available for reasoning</text>
+
+        <text x="20" y="230" font-family="Geist Mono, monospace" font-size="10" letter-spacing="0.06em" style="fill:var(--fg-mute)">Fractions illustrative; derived from BBH +5.0 and the "effective depth" claim in §5 of the paper.</text>
+      </svg>
+    </div>
+    <div class="why">
+      <strong>Why this matters.</strong> The headline gain is not knowledge benchmarks. MMLU +3.4 is the expected win. The unexpected win is BBH +5.0 and ARC-Challenge +3.7, because the network now has its early layers free for the parts of the task that actually need thinking.
+    </div>
+  </section>
+
+  <!-- ============== SECTION 4: WALKTHROUGH PART 2 ============== -->
+  <section class="block">
+    <span class="section-tag">WALKTHROUGH &middot; PART 2</span>
+    <h2>How O(1) N-gram lookup actually works</h2>
+    <p>The classic problem with N-gram models is the curse of vocabulary. There are ~100k BPE tokens in a typical tokenizer, and <code> v^5 </code> for order-5 N-grams is around <code> 10^25 </code>, which is not a parameter count, it is a heat death of the universe. Engram sidesteps this with three moves.</p>
+    <p><strong>Move 1: tokenizer compression.</strong> A surjective map collapses semantically equivalent tokens. Lowercasing. Unicode folding. Merging 4 into 4. This trims the effective vocabulary by ~23%, which kills most of the combinatorial explosion before it starts.</p>
+    <p><strong>Move 2: suffix N-grams of multiple orders.</strong> For every position <code>t</code>, Engram extracts the suffix 2-gram, 3-gram, 4-gram, and 5-gram ending at <code>t</code>. Short orders catch local collocations; long orders catch idioms and entity names. The retrieved vectors from all orders are concatenated.</p>
+    <p><strong>Move 3: multi-head hashing.</strong> You cannot parameterize every N-gram, so for each order <code>n</code>, you pick <code>K</code> independent hash functions, each of which maps the compressed N-gram deterministically into one of <code> M / K </code> rows of the embedding table. Different heads hash to different rows, which mitigates collisions: the same N-gram appearing in two semantically distinct contexts usually gets retrieved through two different heads and the gate learns to favor the right one.</p>
+    <div class="figure">
+      <svg viewBox="0 0 760 240" role="img" aria-label="A suffix 3-gram &quot;capital of France&quot; being hashed through K=3 independent hash heads into three rows of an embedding table. Concatenated rows form the retrieved memory vector.">
+        <text x="20" y="26" font-family="Geist Mono, monospace" font-size="11" letter-spacing="2" style="fill:var(--fg-mute)">MULTI-HEAD HASH LOOKUP</text>
+
+        <!-- N-gram -->
+        <g>
+          <rect x="40" y="80" width="200" height="44" rx="10" style="fill:var(--accent-soft);stroke:var(--accent)"/>
+          <text x="140" y="100" text-anchor="middle" font-size="13" font-weight="600" style="fill:var(--fg)">suffix 3-gram</text>
+          <text x="140" y="116" text-anchor="middle" font-family="Geist Mono, monospace" font-size="10" style="fill:var(--fg-mute)">&quot;capital of France&quot;</text>
+        </g>
+
+        <!-- Hash heads -->
+        <line x1="240" y1="100" x2="290" y2="60" style="stroke:var(--accent);stroke-width:1.4" marker-end="url(#arr2)"/>
+        <line x1="240" y1="100" x2="290" y2="102" style="stroke:var(--accent);stroke-width:1.4" marker-end="url(#arr2)"/>
+        <line x1="240" y1="100" x2="290" y2="148" style="stroke:var(--accent);stroke-width:1.4" marker-end="url(#arr2)"/>
+
+        <g>
+          <rect x="290" y="42" width="80" height="36" rx="8" style="fill:var(--bg-elev);stroke:var(--border)"/>
+          <text x="330" y="58" text-anchor="middle" font-size="11" font-weight="600" style="fill:var(--fg)">h_1()</text>
+          <text x="330" y="72" text-anchor="middle" font-family="Geist Mono, monospace" font-size="9" style="fill:var(--fg-mute)">hash head 1</text>
+        </g>
+        <g>
+          <rect x="290" y="84" width="80" height="36" rx="8" style="fill:var(--bg-elev);stroke:var(--border)"/>
+          <text x="330" y="100" text-anchor="middle" font-size="11" font-weight="600" style="fill:var(--fg)">h_2()</text>
+          <text x="330" y="114" text-anchor="middle" font-family="Geist Mono, monospace" font-size="9" style="fill:var(--fg-mute)">hash head 2</text>
+        </g>
+        <g>
+          <rect x="290" y="130" width="80" height="36" rx="8" style="fill:var(--bg-elev);stroke:var(--border)"/>
+          <text x="330" y="146" text-anchor="middle" font-size="11" font-weight="600" style="fill:var(--fg)">h_3()</text>
+          <text x="330" y="160" text-anchor="middle" font-family="Geist Mono, monospace" font-size="9" style="fill:var(--fg-mute)">hash head 3</text>
+        </g>
+
+        <!-- Table -->
+        <line x1="370" y1="60" x2="410" y2="60" style="stroke:var(--accent);stroke-width:1.4" marker-end="url(#arr2)"/>
+        <line x1="370" y1="102" x2="410" y2="102" style="stroke:var(--accent);stroke-width:1.4" marker-end="url(#arr2)"/>
+        <line x1="370" y1="148" x2="410" y2="148" style="stroke:var(--accent);stroke-width:1.4" marker-end="url(#arr2)"/>
+
+        <g>
+          <rect x="410" y="44" width="320" height="36" rx="4" style="fill:var(--bg-elev);stroke:var(--border)"/>
+          <text x="420" y="58" font-family="Geist Mono, monospace" font-size="10" style="fill:var(--fg-mute)">row 0</text>
+          <rect x="450" y="50" width="20" height="24" style="fill:var(--accent);fill-opacity:0.5"/>
+          <rect x="472" y="50" width="20" height="24" style="fill:var(--accent);fill-opacity:0.3"/>
+          <rect x="494" y="50" width="20" height="24" style="fill:var(--accent);fill-opacity:0.7"/>
+          <rect x="516" y="50" width="20" height="24" style="fill:var(--accent);fill-opacity:0.4"/>
+          <rect x="538" y="50" width="20" height="24" style="fill:var(--accent);fill-opacity:0.6"/>
+          <rect x="560" y="50" width="20" height="24" style="fill:var(--accent);fill-opacity:0.3"/>
+          <rect x="582" y="50" width="20" height="24" style="fill:var(--accent);fill-opacity:0.5"/>
+          <rect x="604" y="50" width="20" height="24" style="fill:var(--accent);fill-opacity:0.7"/>
+          <rect x="626" y="50" width="20" height="24" style="fill:var(--accent);fill-opacity:0.4"/>
+          <rect x="648" y="50" width="20" height="24" style="fill:var(--accent);fill-opacity:0.6"/>
+          <rect x="670" y="50" width="20" height="24" style="fill:var(--accent);fill-opacity:0.3"/>
+          <rect x="692" y="50" width="20" height="24" style="fill:var(--accent);fill-opacity:0.5"/>
+          <text x="722" y="68" font-family="Geist Mono, monospace" font-size="10" style="fill:var(--fg-mute)">...</text>
+        </g>
+        <g>
+          <rect x="410" y="86" width="320" height="36" rx="4" style="fill:var(--bg-elev);stroke:var(--border)"/>
+          <text x="420" y="100" font-family="Geist Mono, monospace" font-size="10" style="fill:var(--fg-mute)">row 17,432</text>
+          <rect x="450" y="92" width="20" height="24" style="fill:var(--accent);fill-opacity:0.3"/>
+          <rect x="472" y="92" width="20" height="24" style="fill:var(--accent);fill-opacity:0.6"/>
+          <rect x="494" y="92" width="20" height="24" style="fill:var(--accent);fill-opacity:0.4"/>
+          <rect x="516" y="92" width="20" height="24" style="fill:var(--accent);fill-opacity:0.7"/>
+          <rect x="538" y="92" width="20" height="24" style="fill:var(--accent);fill-opacity:0.5"/>
+          <rect x="560" y="92" width="20" height="24" style="fill:var(--accent);fill-opacity:0.3"/>
+          <rect x="582" y="92" width="20" height="24" style="fill:var(--accent);fill-opacity:0.6"/>
+          <rect x="604" y="92" width="20" height="24" style="fill:var(--accent);fill-opacity:0.4"/>
+          <rect x="626" y="92" width="20" height="24" style="fill:var(--accent);fill-opacity:0.7"/>
+          <rect x="648" y="92" width="20" height="24" style="fill:var(--accent);fill-opacity:0.5"/>
+          <rect x="670" y="92" width="20" height="24" style="fill:var(--accent);fill-opacity:0.3"/>
+          <rect x="692" y="92" width="20" height="24" style="fill:var(--accent);fill-opacity:0.6"/>
+          <text x="722" y="110" font-family="Geist Mono, monospace" font-size="10" style="fill:var(--fg-mute)">...</text>
+        </g>
+        <g>
+          <rect x="410" y="132" width="320" height="36" rx="4" style="fill:var(--bg-elev);stroke:var(--border)"/>
+          <text x="420" y="146" font-family="Geist Mono, monospace" font-size="10" style="fill:var(--fg-mute)">row 882,109</text>
+          <rect x="450" y="138" width="20" height="24" style="fill:var(--accent);fill-opacity:0.5"/>
+          <rect x="472" y="138" width="20" height="24" style="fill:var(--accent);fill-opacity:0.3"/>
+          <rect x="494" y="138" width="20" height="24" style="fill:var(--accent);fill-opacity:0.7"/>
+          <rect x="516" y="138" width="20" height="24" style="fill:var(--accent);fill-opacity:0.4"/>
+          <rect x="538" y="138" width="20" height="24" style="fill:var(--accent);fill-opacity:0.6"/>
+          <rect x="560" y="138" width="20" height="24" style="fill:var(--accent);fill-opacity:0.3"/>
+          <rect x="582" y="138" width="20" height="24" style="fill:var(--accent);fill-opacity:0.5"/>
+          <rect x="604" y="138" width="20" height="24" style="fill:var(--accent);fill-opacity:0.7"/>
+          <rect x="626" y="138" width="20" height="24" style="fill:var(--accent);fill-opacity:0.4"/>
+          <rect x="648" y="138" width="20" height="24" style="fill:var(--accent);fill-opacity:0.6"/>
+          <rect x="670" y="138" width="20" height="24" style="fill:var(--accent);fill-opacity:0.3"/>
+          <rect x="692" y="138" width="20" height="24" style="fill:var(--accent);fill-opacity:0.5"/>
+          <text x="722" y="156" font-family="Geist Mono, monospace" font-size="10" style="fill:var(--fg-mute)">...</text>
+        </g>
+
+        <!-- concatenate arrow -->
+        <line x1="740" y1="106" x2="755" y2="106" style="stroke:var(--accent);stroke-width:1.6"/>
+        <text x="20" y="208" font-family="Geist Mono, monospace" font-size="11" style="fill:var(--accent)">concat rows &rarr; depthwise conv &rarr; gate &rarr; add to residual</text>
+        <text x="20" y="226" font-family="Geist Mono, monospace" font-size="10" style="fill:var(--fg-mute)">K heads index K disjoint (or near-disjoint) rows. Concatenated retrieval is the mem representation for token t.</text>
+      </svg>
+    </div>
+    <div class="why">
+      <strong>Why this matters.</strong> Three hash heads is a small number. The point is that even with collisions, the gate (next section) can pick which head to lean on, so the system tolerates hash noise the way a transformer tolerates attention noise. You do not need a perfect hash; you need a cheap one that the rest of the model can correct.
+    </div>
+  </section>
+
+  <!-- ============== SECTION 5: WALKTHROUGH PART 3 ============== -->
+  <section class="block">
+    <span class="section-tag">WALKTHROUGH &middot; PART 3</span>
+    <h2>The gate is the actual trick</h2>
+    <p>Raw N-gram embeddings are context-blind. The N-gram "<code>Apple</code>" can mean the company, the fruit, or the Big Apple. A static lookup table cannot tell those apart. If you just add the retrieved vector to the residual stream, you get the wrong answer half the time.</p>
+    <p>Engram fixes this with a learned scalar gate. For each position, the current hidden state from the preceding transformer layer projects into a query vector. The retrieved memory projects into a key vector. The gate is <code> sigmoid(query &middot; key) </code>, clamped near 0 when the context says "ignore this lookup," near 1 when it says "use it."</p>
+    <p>The gate is also what makes collisions survivable. If hash head 1 and hash head 2 both happen to land on the same row for an unrelated N-gram, the gate will weight whichever head the current token really came from and discard the other. The lookup is the cheap part; the gate is the precise part.</p>
+    <div class="figure">
+      <svg viewBox="0 0 760 220" role="img" aria-label="For the same N-gram &quot;Apple&quot; the gate takes different values depending on context. In a finance context the gate is high; in a fruit context it is low; in a city context it is near zero.">
+        <text x="20" y="26" font-family="Geist Mono, monospace" font-size="11" letter-spacing="2" style="fill:var(--fg-mute)">CONTEXT-DEPENDENT GATE</text>
+
+        <!-- Three rows: each shows the same N-gram but a different context and gate value -->
+        <g>
+          <text x="20" y="64" font-family="Geist Mono, monospace" font-size="11" style="fill:var(--fg-mute)">CONTEXT</text>
+          <text x="180" y="64" font-family="Geist Mono, monospace" font-size="11" style="fill:var(--fg-mute)">N-GRAM</text>
+          <text x="360" y="64" font-family="Geist Mono, monospace" font-size="11" style="fill:var(--fg-mute)">RETRIEVED MEMORY</text>
+          <text x="600" y="64" font-family="Geist Mono, monospace" font-size="11" style="fill:var(--fg-mute)">GATE</text>
+
+          <!-- Row 1: Apple the company -->
+          <rect x="20" y="76" width="140" height="36" rx="6" style="fill:var(--bg-elev);stroke:var(--border)"/>
+          <text x="90" y="98" text-anchor="middle" font-size="11" style="fill:var(--fg)">AAPL stock</text>
+          <rect x="180" y="76" width="160" height="36" rx="6" style="fill:var(--accent-soft);stroke:var(--accent);stroke-opacity:0.5"/>
+          <text x="260" y="98" text-anchor="middle" font-size="12" font-weight="600" style="fill:var(--fg)">... &quot;Apple&quot; ...</text>
+          <rect x="360" y="76" width="220" height="36" rx="6" style="fill:var(--cool-soft);stroke:var(--cool);stroke-opacity:0.5"/>
+          <text x="470" y="98" text-anchor="middle" font-size="11" style="fill:var(--fg)">corporate entity vector</text>
+          <rect x="600" y="76" width="120" height="36" rx="18" style="fill:var(--accent);fill-opacity:0.85"/>
+          <text x="660" y="100" text-anchor="middle" font-size="14" font-weight="700" style="fill:var(--bg)">0.93</text>
+
+          <!-- Row 2: Apple the fruit -->
+          <rect x="20" y="120" width="140" height="36" rx="6" style="fill:var(--bg-elev);stroke:var(--border)"/>
+          <text x="90" y="142" text-anchor="middle" font-size="11" style="fill:var(--fg)">fruit salad</text>
+          <rect x="180" y="120" width="160" height="36" rx="6" style="fill:var(--accent-soft);stroke:var(--accent);stroke-opacity:0.5"/>
+          <text x="260" y="142" text-anchor="middle" font-size="12" font-weight="600" style="fill:var(--fg)">... &quot;Apple&quot; ...</text>
+          <rect x="360" y="120" width="220" height="36" rx="6" style="fill:var(--cool-soft);stroke:var(--cool);stroke-opacity:0.5"/>
+          <text x="470" y="142" text-anchor="middle" font-size="11" style="fill:var(--fg)">edible fruit vector</text>
+          <rect x="600" y="120" width="120" height="36" rx="18" style="fill:var(--accent);fill-opacity:0.4"/>
+          <text x="660" y="144" text-anchor="middle" font-size="14" font-weight="700" style="fill:var(--fg)">0.41</text>
+
+          <!-- Row 3: Apple the city -->
+          <rect x="20" y="164" width="140" height="36" rx="6" style="fill:var(--bg-elev);stroke:var(--border)"/>
+          <text x="90" y="186" text-anchor="middle" font-size="11" style="fill:var(--fg)">New York</text>
+          <rect x="180" y="164" width="160" height="36" rx="6" style="fill:var(--accent-soft);stroke:var(--accent);stroke-opacity:0.5"/>
+          <text x="260" y="186" text-anchor="middle" font-size="12" font-weight="600" style="fill:var(--fg)">... &quot;Apple&quot; ...</text>
+          <rect x="360" y="164" width="220" height="36" rx="6" style="fill:var(--cool-soft);stroke:var(--cool);stroke-opacity:0.5"/>
+          <text x="470" y="186" text-anchor="middle" font-size="11" style="fill:var(--fg)">city / landmark vector</text>
+          <rect x="600" y="164" width="120" height="36" rx="18" style="fill:var(--accent);fill-opacity:0.12"/>
+          <text x="660" y="188" text-anchor="middle" font-size="14" font-weight="700" style="fill:var(--fg-mute)">0.07</text>
+        </g>
+      </svg>
+    </div>
+    <div class="why">
+      <strong>Why this matters.</strong> A vanilla N-gram model has the same problem from 1995. What changed is that the gate query is the full hidden state, not a bag-of-words signal. The lookup is stupid. The network around it is not. That is the whole contribution.
+    </div>
+  </section>
+
+  <!-- ============== SECTION 6: WALKTHROUGH PART 4 ============== -->
+  <section class="block">
+    <span class="section-tag">WALKTHROUGH &middot; PART 4</span>
+    <h2>The U-shaped allocation curve</h2>
+    <p>You cannot just dump half your inactive parameters into Engram. The paper's "Sparsity Allocation" experiment fixes a total parameter budget, varies the share given to Engram versus MoE, and measures loss. The curve is U-shaped: too little Engram and the model still wastes depth on static knowledge; too much Engram and you have starved the experts that do the actual reasoning work.</p>
+    <p>The optimum sits around <strong>20-25% of inactive parameters to Engram</strong>, with the remaining 75-80% staying in MoE. The intuition is sharp: Engram is dense per-token (every token triggers a lookup), so over-allocating to it inflates every forward pass's compute and storage, while under-allocating leaves the early-layer knowledge tax in place. The sweet spot is exactly where the lookup handles the patterns it should handle and the experts handle the patterns only experts can handle.</p>
+    <div class="figure">
+      <svg viewBox="0 0 760 280" role="img" aria-label="A U-shaped curve showing loss as a function of the share of inactive parameters given to Engram versus MoE. The minimum sits at roughly 20-25% Engram.">
+        <text x="20" y="26" font-family="Geist Mono, monospace" font-size="11" letter-spacing="2" style="fill:var(--fg-mute)">SPARSITY ALLOCATION CURVE</text>
+
+        <!-- Axes -->
+        <line x1="60" y1="60" x2="60" y2="240" style="stroke:var(--border);stroke-width:1"/>
+        <line x1="60" y1="240" x2="720" y2="240" style="stroke:var(--border);stroke-width:1"/>
+
+        <!-- Axis labels -->
+        <text x="40" y="64" text-anchor="end" font-family="Geist Mono, monospace" font-size="10" style="fill:var(--fg-mute)">loss</text>
+        <text x="60" y="256" font-family="Geist Mono, monospace" font-size="10" style="fill:var(--fg-mute)">0%</text>
+        <text x="240" y="256" font-family="Geist Mono, monospace" font-size="10" style="fill:var(--fg-mute)">25%</text>
+        <text x="420" y="256" font-family="Geist Mono, monospace" font-size="10" style="fill:var(--fg-mute)">50%</text>
+        <text x="600" y="256" font-family="Geist Mono, monospace" font-size="10" style="fill:var(--fg-mute)">75%</text>
+        <text x="710" y="256" font-family="Geist Mono, monospace" font-size="10" style="fill:var(--fg-mute)">100%</text>
+        <text x="380" y="276" text-anchor="middle" font-family="Geist Mono, monospace" font-size="10" style="fill:var(--fg-mute)">share of inactive parameters given to Engram</text>
+
+        <!-- Curve (U-shape) -->
+        <path d="M 60 100 Q 240 230 420 220 T 720 80" stroke="var(--accent)" stroke-width="2.4" fill="none"/>
+
+        <!-- Sweet spot marker -->
+        <circle cx="240" cy="222" r="6" style="fill:var(--accent)">
+          <animate attributeName="r" values="6;9;6" dur="2s" repeatCount="indefinite"/>
+        </circle>
+        <line x1="240" y1="222" x2="240" y2="240" style="stroke:var(--accent);stroke-width:1.4"/>
+        <text x="252" y="220" font-family="Geist Mono, monospace" font-size="10" style="fill:var(--accent)">sweet spot</text>
+        <text x="252" y="232" font-family="Geist Mono, monospace" font-size="10" style="fill:var(--fg-mute)">~20-25% Engram</text>
+
+        <!-- Too-little and too-much labels -->
+        <text x="100" y="118" font-family="Geist Mono, monospace" font-size="10" style="fill:var(--warm)">too little: knowledge tax</text>
+        <text x="600" y="100" font-family="Geist Mono, monospace" font-size="10" style="fill:var(--warm)">too much: experts starved</text>
+      </svg>
+    </div>
+    <div class="why">
+      <strong>Why this matters.</strong> Engram is not a replacement for MoE, and MoE is not a replacement for Engram. They are two axes of sparsity that compose. The paper's headline result, Engram-27B beating a strictly iso-parameter, iso-FLOP MoE-27B, comes from allocating the same budget across both axes instead of stacking everything into one.
+    </div>
+  </section>
+
+  <!-- ============== SECTION 7: WALKTHROUGH PART 5 ============== -->
+  <section class="block">
+    <span class="section-tag">WALKTHROUGH &middot; PART 5</span>
+    <h2>Why the tables can live in host DRAM</h2>
+    <p>An Engram table with 27B parameters is roughly 54 GB at 16-bit precision. That does not fit on a single accelerator. It does fit in a server's host DRAM.</p>
+    <p>The trick is that the addressing is fully deterministic. The hash for N-gram <code> g </code> at position <code> t </code> depends only on the compressed tokens, not on any other model state. So the runtime can compute which row to fetch, prefetch the rows for the next few hundred tokens, and overlap the fetch with attention/FFN compute on the accelerator. The paper reports <strong>less than 3% throughput penalty</strong> when offloading a 100B-parameter Engram table entirely to host memory on 4B and 8B backbone models.</p>
+    <p>That is the deal that makes the architecture viable. Memory capacity scales with host RAM, not GPU HBM. The model can grow to 100B or 200B of memory without anybody buying a new GPU.</p>
+    <div class="figure">
+      <svg viewBox="0 0 760 220" role="img" aria-label="An Engram table stored in host DRAM, with the GPU prefetching the rows it needs for the next tokens while running attention and FFN on the current token.">
+        <text x="20" y="26" font-family="Geist Mono, monospace" font-size="11" letter-spacing="2" style="fill:var(--fg-mute)">PREFETCH OVERLAP</text>
+
+        <!-- GPU block -->
+        <g>
+          <rect x="40" y="60" width="220" height="130" rx="10" style="fill:var(--cool-soft);stroke:var(--cool);stroke-opacity:0.6"/>
+          <text x="150" y="82" text-anchor="middle" font-size="13" font-weight="600" style="fill:var(--fg)">GPU (HBM)</text>
+          <text x="150" y="100" text-anchor="middle" font-family="Geist Mono, monospace" font-size="10" style="fill:var(--fg-mute)">attention + FFN</text>
+          <rect x="60" y="120" width="180" height="20" rx="4" style="fill:var(--bg-elev);stroke:var(--border)"/>
+          <text x="150" y="134" text-anchor="middle" font-family="Geist Mono, monospace" font-size="10" style="fill:var(--fg)">token t-1 .. t (compute)</text>
+          <rect x="60" y="148" width="180" height="20" rx="4" style="fill:var(--accent-soft);stroke:var(--accent);stroke-opacity:0.4"/>
+          <text x="150" y="162" text-anchor="middle" font-family="Geist Mono, monospace" font-size="10" style="fill:var(--fg)">token t+1 .. t+k (prefetched)</text>
+        </g>
+
+        <!-- Arrow -->
+        <line x1="270" y1="125" x2="320" y2="125" style="stroke:var(--accent);stroke-width:2" marker-end="url(#arr2)"/>
+        <text x="295" y="118" text-anchor="middle" font-family="Geist Mono, monospace" font-size="9" style="fill:var(--fg-mute)">PCIe</text>
+
+        <!-- Host block -->
+        <g>
+          <rect x="330" y="60" width="380" height="130" rx="10" style="fill:var(--accent-soft);stroke:var(--accent);stroke-opacity:0.6"/>
+          <text x="520" y="82" text-anchor="middle" font-size="13" font-weight="600" style="fill:var(--fg)">HOST DRAM</text>
+          <text x="520" y="100" text-anchor="middle" font-family="Geist Mono, monospace" font-size="10" style="fill:var(--fg-mute)">Engram embedding table &middot; up to ~100B params</text>
+
+          <!-- table rows -->
+          <rect x="350" y="116" width="50" height="14" rx="2" style="fill:var(--accent);fill-opacity:0.6"><animate attributeName="fill-opacity" values="0.4;0.8;0.4" dur="2.4s" begin="0s" repeatCount="indefinite"/></rect>
+          <rect x="402" y="116" width="50" height="14" rx="2" style="fill:var(--accent);fill-opacity:0.6"><animate attributeName="fill-opacity" values="0.4;0.8;0.4" dur="2.4s" begin="0.2s" repeatCount="indefinite"/></rect>
+          <rect x="454" y="116" width="50" height="14" rx="2" style="fill:var(--accent);fill-opacity:0.6"><animate attributeName="fill-opacity" values="0.4;0.8;0.4" dur="2.4s" begin="0.4s" repeatCount="indefinite"/></rect>
+          <rect x="506" y="116" width="50" height="14" rx="2" style="fill:var(--accent);fill-opacity:0.6"><animate attributeName="fill-opacity" values="0.4;0.8;0.4" dur="2.4s" begin="0.6s" repeatCount="indefinite"/></rect>
+          <rect x="558" y="116" width="50" height="14" rx="2" style="fill:var(--accent);fill-opacity:0.6"><animate attributeName="fill-opacity" values="0.4;0.8;0.4" dur="2.4s" begin="0.8s" repeatCount="indefinite"/></rect>
+          <rect x="610" y="116" width="50" height="14" rx="2" style="fill:var(--accent);fill-opacity:0.6"><animate attributeName="fill-opacity" values="0.4;0.8;0.4" dur="2.4s" begin="1.0s" repeatCount="indefinite"/></rect>
+          <rect x="662" y="116" width="40" height="14" rx="2" style="fill:var(--accent);fill-opacity:0.6"><animate attributeName="fill-opacity" values="0.4;0.8;0.4" dur="2.4s" begin="1.2s" repeatCount="indefinite"/></rect>
+
+          <rect x="350" y="138" width="50" height="14" rx="2" style="fill:var(--cool);fill-opacity:0.45"><animate attributeName="fill-opacity" values="0.25;0.6;0.25" dur="2.4s" begin="0s" repeatCount="indefinite"/></rect>
+          <rect x="402" y="138" width="50" height="14" rx="2" style="fill:var(--cool);fill-opacity:0.45"><animate attributeName="fill-opacity" values="0.25;0.6;0.25" dur="2.4s" begin="0.2s" repeatCount="indefinite"/></rect>
+          <rect x="454" y="138" width="50" height="14" rx="2" style="fill:var(--cool);fill-opacity:0.45"><animate attributeName="fill-opacity" values="0.25;0.6;0.25" dur="2.4s" begin="0.4s" repeatCount="indefinite"/></rect>
+          <rect x="506" y="138" width="50" height="14" rx="2" style="fill:var(--cool);fill-opacity:0.45"><animate attributeName="fill-opacity" values="0.25;0.6;0.25" dur="2.4s" begin="0.6s" repeatCount="indefinite"/></rect>
+          <rect x="558" y="138" width="50" height="14" rx="2" style="fill:var(--cool);fill-opacity:0.45"><animate attributeName="fill-opacity" values="0.25;0.6;0.25" dur="2.4s" begin="0.8s" repeatCount="indefinite"/></rect>
+          <rect x="610" y="138" width="50" height="14" rx="2" style="fill:var(--cool);fill-opacity:0.45"><animate attributeName="fill-opacity" values="0.25;0.6;0.25" dur="2.4s" begin="1.0s" repeatCount="indefinite"/></rect>
+          <rect x="662" y="138" width="40" height="14" rx="2" style="fill:var(--cool);fill-opacity:0.45"><animate attributeName="fill-opacity" values="0.25;0.6;0.25" dur="2.4s" begin="1.2s" repeatCount="indefinite"/></rect>
+
+          <text x="520" y="172" text-anchor="middle" font-family="Geist Mono, monospace" font-size="10" style="fill:var(--fg-mute)">deterministic addressing &rarr; prefetch pipeline</text>
+        </g>
+      </svg>
+    </div>
+    <div class="why">
+      <strong>Why this matters.</strong> "Memory" as a sparsity axis only works if memory is cheap. The fact that Engram tables can sit in cheap DRAM and be prefetched deterministically is what makes the architecture economically deployable, not just theoretically interesting. RAG has the same memory economics but pays a retrieval round trip; Engram pays a hash.
+    </div>
+  </section>
+
+  <!-- ============== SECTION 8: COMMON CONFUSIONS ============== -->
+  <section class="block">
+    <span class="section-tag">COMMON CONFUSIONS</span>
+    <h2>What people get wrong on first read</h2>
+    <div class="confusion-grid">
+      <div class="confusion">
+        <div class="num">CONFUSION 01</div>
+        <h4>"Engram is just RAG with extra steps."</h4>
+        <p class="wrong">Wrong. RAG retrieves documents at query time and stuffs them into the context window. Engram retrieves <em>embeddings</em> at every token and adds them to the residual stream through a learned gate, with no context cost and no retrieval round trip.</p>
+        <p class="right"><strong>The right frame:</strong> RAG is non-parametric memory at the <em>document</em> level; Engram is parametric memory at the <em>N-gram</em> level. RAG moves bits through context tokens; Engram moves bits through weight deltas.</p>
+      </div>
+      <div class="confusion">
+        <div class="num">CONFUSION 02</div>
+        <h4>"Engram replaces MoE."</h4>
+        <p class="wrong">Wrong. MoE is conditional <em>computation</em> (sparse experts). Engram is conditional <em>memory</em> (sparse N-gram lookup). They are orthogonal axes. The paper's winning recipe keeps MoE for reasoning and adds Engram on top.</p>
+        <p class="right"><strong>The right frame:</strong> Drop Engram into a dense model and you under-use experts. Drop it into a pure-MoE model and you get the paper's headline numbers. The U-shape exists because the budget has to be split, not because Engram subsumes it.</p>
+      </div>
+      <div class="confusion">
+        <div class="num">CONFUSION 03</div>
+        <h4>"Hash collisions make this useless."</h4>
+        <p class="wrong">Wrong on the naive read. Hash collisions mean unrelated N-grams sometimes share a row, which sounds fatal for retrieval quality.</p>
+        <p class="right"><strong>The right frame:</strong> Multi-head hashing spreads one N-gram across K independent hashes, so the same collision in head 1 is usually clear in head 2 or 3. The gate then weights whichever head's row actually matches the current context. Collisions become noise the network learns to ignore, not a correctness bug.</p>
+      </div>
+      <div class="confusion">
+        <div class="num">CONFUSION 04</div>
+        <h4>"If Engram is so good, every new model will use it."</h4>
+        <p class="wrong">Wrong. Engram is a memory tax, not a free lunch. Adding it inflates every forward pass's storage and bandwidth, even when the gate fires near zero, because you still have to compute the hash and look up the rows.</p>
+        <p class="right"><strong>The right frame:</strong> Engram pays off when you have enough static knowledge in the training corpus to fill the table, and when the serving hardware can prefetch deterministically. Small models on small corpora with tight latency budgets will probably skip it. Big pretraining runs with host DRAM to spare will probably adopt it.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============== SECTION 9: WHERE TO GO NEXT ============== -->
+  <section class="block">
+    <span class="section-tag">WHERE TO GO NEXT</span>
+    <h2>Three places to dig deeper</h2>
+    <div class="next-list">
+      <div class="label">PICK ONE</div>
+      <ol>
+        <li><a href="https://arxiv.org/abs/2601.07372" target="_blank" rel="noopener">Cheng et al. 2026, "Conditional Memory via Scalable Lookup" (arXiv 2601.07372)</a> &middot; the DeepSeek paper, with the U-shape curve, the 27B ablation, and the host-DRAM prefetch numbers.</li>
+        <li><a href="https://github.com/deepseek-ai/Engram" target="_blank" rel="noopener">deepseek-ai/Engram reference implementation</a> &middot; PyTorch + a small Engram layer you can drop into any transformer block to see the gate, hash, and lookup pipeline in working code.</li>
+        <li><a href="https://arxiv.org/abs/2607.24805" target="_blank" rel="noopener">Schessl 2026, "Forgetting Is Not a Fix: Path Dependence in Sequential Engram Editing"</a> &middot; a recent (July 2026) followup that tests whether the closed-form Engram edits compose under sequential load. Spoiler: they don't, in a way that matters for any system that updates the table post-deployment.</li>
+      </ol>
+    </div>
+  </section>
+
+  <footer class="bot">
+    <p>Day 12 of the explainer series. Built by Hermes using the explainer-builder skill. Numbers (MMLU +3.4, BBH +5.0, ARC-Challenge +3.7, HumanEval +3.0, Multi-Query NIAH 84.2 &rarr; 97.0, 27B Engram parameters, ~20-25% allocation, &lt;3% DRAM offload penalty) come from Cheng et al. 2026 (arXiv 2601.07372) unless tagged otherwise. The U-shape curve and the host-DRAM prefetch mechanism are paraphrased from sections 4 and 6 of the paper; the "effective depth" framing is the authors' own.</p>
+  </footer>
+
+</main>
+
+<script>
+  // Theme toggle
+  (function () {
+    var btn = document.getElementById('themeBtn');
+    var icoL = document.getElementById('icoLight');
+    var icoD = document.getElementById('icoDark');
+    function paint() {
+      var t = document.documentElement.getAttribute('data-theme');
+      if (t === 'dark') { icoL.style.display = 'inline-block'; icoD.style.display = 'none'; }
+      else { icoL.style.display = 'none'; icoD.style.display = 'inline-block'; }
+    }
+    paint();
+    btn.addEventListener('click', function () {
+      var cur = document.documentElement.getAttribute('data-theme') || 'light';
+      var nxt = cur === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', nxt);
+      try { localStorage.setItem('hermes-theme', nxt); } catch (e) {}
+      paint();
+    });
+  })();
+</script>
+
+</body>
+</html>
