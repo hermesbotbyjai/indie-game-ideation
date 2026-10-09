@@ -1,0 +1,1003 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Taalas hardwired inference: when weights become silicon</title>
+<meta name="description" content="How Taalas etches a Llama 8B into transistors and streams tokens through physical wires at 17,000 tok/s, no DRAM, no rewrites, no fanout.">
+<script>
+  // Pre-stylesheet theme resolver. Runs before <style> to avoid flash.
+  try {
+    var t = localStorage.getItem('theme');
+    if (t === 'dark' || (!t && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+      document.documentElement.setAttribute('data-theme', 'dark');
+    }
+  } catch (e) {}
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #ffffff;
+    --bg-elev: #fafaf9;
+    --bg-code: #f7f6f3;
+    --text: #0a0a0a;
+    --text-2: #4a4a4a;
+    --text-3: #767676;
+    --border: rgba(10,10,10,0.08);
+    --border-strong: rgba(10,10,10,0.14);
+    --accent: #18E299;
+    --accent-hover: #0fb880;
+    --accent-soft: rgba(24,226,153,0.10);
+    --accent-glow: rgba(24,226,153,0.22);
+    --warn: #ff5a3c;
+    --code-text: #1a1a1a;
+    --shadow-soft: 0 1px 2px rgba(10,10,10,0.04), 0 4px 16px rgba(10,10,10,0.04);
+    --radius-sm: 6px;
+    --radius: 10px;
+    --radius-lg: 16px;
+    --radius-pill: 9999px;
+    --max: 1200px;
+    --gutter: 24px;
+    --font: 'Inter', system-ui, -apple-system, sans-serif;
+    --mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Consolas, monospace;
+  }
+  [data-theme="dark"] {
+    --bg: #0a0a0a;
+    --bg-elev: #131313;
+    --bg-code: #181818;
+    --text: #fafafa;
+    --text-2: #b8b8b8;
+    --text-3: #888888;
+    --border: rgba(255,255,255,0.08);
+    --border-strong: rgba(255,255,255,0.14);
+    --accent: #2af5a8;
+    --accent-hover: #44ffba;
+    --accent-soft: rgba(42,245,168,0.12);
+    --accent-glow: rgba(42,245,168,0.28);
+    --warn: #ff7a5c;
+    --code-text: #e8e8e8;
+    --shadow-soft: 0 1px 2px rgba(0,0,0,0.4), 0 4px 16px rgba(0,0,0,0.3);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0a0a0a;
+      --bg-elev: #131313;
+      --bg-code: #181818;
+      --text: #fafafa;
+      --text-2: #b8b8b8;
+      --text-3: #888888;
+      --border: rgba(255,255,255,0.08);
+      --border-strong: rgba(255,255,255,0.14);
+      --accent: #2af5a8;
+      --accent-hover: #44ffba;
+      --accent-soft: rgba(42,245,168,0.12);
+      --accent-glow: rgba(42,245,168,0.28);
+      --warn: #ff7a5c;
+      --code-text: #e8e8e8;
+      --shadow-soft: 0 1px 2px rgba(0,0,0,0.4), 0 4px 16px rgba(0,0,0,0.3);
+    }
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    font-family: var(--font);
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    transition: background 220ms ease, color 220ms ease;
+  }
+  a { color: inherit; text-decoration: none; }
+  code, .mono { font-family: var(--mono); font-size: 0.9em; }
+
+  /* NAV */
+  .nav {
+    position: sticky; top: 0; z-index: 100;
+    backdrop-filter: saturate(180%) blur(14px);
+    -webkit-backdrop-filter: saturate(180%) blur(14px);
+    background: color-mix(in srgb, var(--bg) 88%, transparent);
+    border-bottom: 1px solid var(--border);
+  }
+  .nav-inner {
+    max-width: var(--max); margin: 0 auto;
+    padding: 14px var(--gutter);
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .nav-brand {
+    display: flex; align-items: center; gap: 10px;
+    font-weight: 700; font-size: 15px; letter-spacing: -0.01em;
+  }
+  .nav-brand-dot {
+    width: 22px; height: 22px; border-radius: 6px;
+    background: var(--accent);
+    box-shadow: 0 0 0 4px var(--accent-soft);
+  }
+  .nav-actions { display: flex; align-items: center; gap: 8px; }
+  .nav-link {
+    font-size: 14px; font-weight: 500;
+    color: var(--text-2);
+    padding: 7px 12px; border-radius: var(--radius-pill);
+    transition: color 160ms, background 160ms;
+  }
+  .nav-link:hover { color: var(--text); background: var(--bg-elev); }
+  .theme-btn {
+    width: 34px; height: 34px;
+    border-radius: var(--radius-pill);
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    cursor: pointer;
+    display: grid; place-items: center;
+    color: var(--text-2);
+    transition: all 160ms;
+  }
+  .theme-btn:hover { color: var(--accent); border-color: var(--accent); }
+  .theme-btn svg { width: 16px; height: 16px; }
+  .theme-btn .sun { display: none; }
+  .theme-btn .moon { display: block; }
+  [data-theme="dark"] .theme-btn .sun { display: block; }
+  [data-theme="dark"] .theme-btn .moon { display: none; }
+
+  /* LAYOUT */
+  .wrap { max-width: var(--max); margin: 0 auto; padding: 0 var(--gutter); }
+  section { padding: 72px 0; border-bottom: 1px solid var(--border); }
+  section:last-of-type { border-bottom: none; }
+
+  /* LABELS */
+  .label {
+    font-family: var(--mono);
+    font-size: 11px; font-weight: 600;
+    letter-spacing: 0.16em; text-transform: uppercase;
+    color: var(--accent);
+    display: inline-flex; align-items: center; gap: 8px;
+    margin-bottom: 18px;
+  }
+  .label::before {
+    content: ''; width: 18px; height: 1.5px;
+    background: var(--accent);
+  }
+
+  /* HERO */
+  .hero { padding: 96px 0 64px; position: relative; overflow: hidden; }
+  .hero::before {
+    content: '';
+    position: absolute; inset: 0;
+    background: radial-gradient(800px 400px at 50% 0%, var(--accent-glow), transparent 60%);
+    opacity: 0.45; pointer-events: none;
+  }
+  .hero-inner { position: relative; max-width: 880px; }
+  h1.hero-title {
+    font-size: clamp(38px, 6vw, 64px);
+    line-height: 1.05; letter-spacing: -0.03em;
+    font-weight: 800; margin-bottom: 18px;
+  }
+  .hero-title em {
+    font-style: normal; color: var(--accent);
+    background: linear-gradient(180deg, transparent 62%, var(--accent-soft) 62%);
+  }
+  .hero-tag {
+    font-size: clamp(17px, 2vw, 20px);
+    color: var(--text-2);
+    max-width: 680px; line-height: 1.5;
+    margin-bottom: 36px;
+  }
+  .hero-list {
+    list-style: none; padding: 0;
+    display: grid; grid-template-columns: repeat(2, 1fr);
+    gap: 10px 28px; max-width: 720px;
+  }
+  .hero-list li {
+    font-size: 15px; color: var(--text-2);
+    display: flex; align-items: flex-start; gap: 10px;
+  }
+  .hero-list li::before {
+    content: ''; width: 6px; height: 6px; border-radius: 50%;
+    background: var(--accent); flex-shrink: 0;
+    margin-top: 8px;
+  }
+  @media (max-width: 720px) {
+    .hero-list { grid-template-columns: 1fr; }
+  }
+
+  /* CALLOUT (one-sentence model) */
+  .callout {
+    background: linear-gradient(180deg, var(--bg-elev), var(--bg));
+    border: 1px solid var(--border-strong);
+    border-left: 3px solid var(--accent);
+    border-radius: var(--radius);
+    padding: 28px 32px;
+    font-size: 22px; line-height: 1.45;
+    font-weight: 500; letter-spacing: -0.01em;
+    color: var(--text);
+    max-width: 880px;
+  }
+  .callout-label {
+    font-family: var(--mono); font-size: 11px;
+    color: var(--text-3); letter-spacing: 0.16em;
+    text-transform: uppercase; margin-bottom: 12px;
+  }
+
+  /* SECTIONS */
+  h2.section-h {
+    font-size: clamp(28px, 4vw, 40px);
+    letter-spacing: -0.025em; line-height: 1.1;
+    font-weight: 700; margin-bottom: 14px;
+    max-width: 820px;
+  }
+  .section-lede {
+    font-size: 18px; color: var(--text-2);
+    max-width: 720px; margin-bottom: 36px; line-height: 1.55;
+  }
+
+  /* MENTAL MODEL DIAGRAM */
+  .mental {
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-lg);
+    background: var(--bg-elev);
+    padding: 32px;
+    overflow-x: auto;
+  }
+  .mental svg { width: 100%; height: auto; max-width: 100%; }
+
+  /* WALKTHROUGH */
+  .walk-item {
+    margin-bottom: 56px;
+    display: grid; grid-template-columns: 1fr; gap: 22px;
+  }
+  .walk-text h3 {
+    font-size: 24px; letter-spacing: -0.02em;
+    font-weight: 700; margin-bottom: 10px;
+  }
+  .walk-text p {
+    font-size: 17px; color: var(--text-2); line-height: 1.6;
+    margin-bottom: 14px;
+  }
+  .walk-text code, .walk-text .mono {
+    background: var(--bg-code); padding: 2px 7px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+    color: var(--text);
+  }
+  .diagram-wrap {
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius);
+    background: var(--bg-elev);
+    padding: 24px;
+    overflow-x: auto;
+  }
+  .diagram-wrap svg { width: 100%; height: auto; display: block; }
+  .why {
+    border-left: 2px solid var(--accent);
+    padding: 14px 18px;
+    background: var(--accent-soft);
+    border-radius: 0 var(--radius) var(--radius) 0;
+    font-size: 14.5px; color: var(--text);
+    line-height: 1.5;
+  }
+  .why strong {
+    font-family: var(--mono); font-size: 11px;
+    letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--accent);
+    display: block; margin-bottom: 6px;
+    font-weight: 600;
+  }
+
+  /* COMMON CONFUSIONS */
+  .conf-grid {
+    display: grid; gap: 18px;
+    grid-template-columns: 1fr;
+    max-width: 920px;
+  }
+  .conf-card {
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius);
+    padding: 22px 24px;
+    background: var(--bg);
+  }
+  .conf-num {
+    font-family: var(--mono); font-size: 11px;
+    color: var(--warn); letter-spacing: 0.14em;
+    font-weight: 600; margin-bottom: 8px;
+  }
+  .conf-q {
+    font-size: 17px; font-weight: 600;
+    margin-bottom: 8px; color: var(--text);
+  }
+  .conf-a {
+    font-size: 15.5px; color: var(--text-2); line-height: 1.55;
+  }
+
+  /* WHERE TO GO NEXT */
+  .next-list {
+    list-style: none; padding: 0;
+    display: grid; gap: 14px;
+    max-width: 880px;
+  }
+  .next-list li {
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius);
+    padding: 18px 22px;
+    background: var(--bg);
+    transition: border-color 160ms, transform 160ms;
+  }
+  .next-list li:hover {
+    border-color: var(--accent);
+    transform: translateY(-1px);
+  }
+  .next-list a {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 18px;
+  }
+  .next-name {
+    font-weight: 600; font-size: 16px;
+    color: var(--text);
+  }
+  .next-where {
+    font-family: var(--mono); font-size: 12px;
+    color: var(--text-3); letter-spacing: 0.08em;
+    margin-top: 4px;
+  }
+  .next-arrow {
+    color: var(--accent); flex-shrink: 0;
+    transition: transform 200ms;
+  }
+  .next-list li:hover .next-arrow { transform: translateX(4px); }
+
+  /* FOOTER */
+  footer {
+    padding: 56px 0 64px;
+    text-align: center;
+    color: var(--text-3);
+    font-size: 14px;
+    border-top: 1px solid var(--border);
+  }
+  footer .mono { color: var(--accent); }
+
+  /* ANIMATIONS */
+  @keyframes pulse-accent {
+    0%, 100% { opacity: 0.6; }
+    50% { opacity: 1; }
+  }
+  @keyframes flow-token {
+    0% { transform: translateX(-220px); opacity: 0; }
+    10% { opacity: 1; }
+    90% { opacity: 1; }
+    100% { transform: translateX(220px); opacity: 0; }
+  }
+  @keyframes flow-token-slow {
+    0% { transform: translateX(-280px); opacity: 0; }
+    10% { opacity: 1; }
+    90% { opacity: 1; }
+    100% { transform: translateX(280px); opacity: 0; }
+  }
+  @keyframes layer-pulse {
+    0%, 100% { fill: var(--accent-soft); }
+    50% { fill: var(--accent-glow); }
+  }
+  @keyframes flow-pulse {
+    0% { stroke-dashoffset: 100; }
+    100% { stroke-dashoffset: 0; }
+  }
+  @keyframes spin-slow {
+    to { transform: rotate(360deg); }
+  }
+  @keyframes blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+  }
+  @keyframes sweep {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(100%); }
+  }
+  @keyframes appear {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes dram-glow {
+    0%, 100% { fill: var(--warn); opacity: 0.15; }
+    50% { fill: var(--warn); opacity: 0.35; }
+  }
+  @keyframes counter-tick {
+    from { transform: translateY(0); }
+    to { transform: translateY(-100%); }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.001s !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.001s !important;
+    }
+  }
+</style>
+</head>
+<body>
+
+<!-- ===== NAV ===== -->
+<nav class="nav">
+  <div class="nav-inner">
+    <a href="#" class="nav-brand">
+      <span class="nav-brand-dot"></span>
+      <span>Hermes / Daily Explainer</span>
+    </a>
+    <div class="nav-actions">
+      <a class="nav-link" href="#walkthrough">Walkthrough</a>
+      <a class="nav-link" href="#confusions">Confusions</a>
+      <a class="nav-link" href="#next">Next</a>
+      <button class="theme-btn" aria-label="Toggle theme" onclick="(function(){var d=document.documentElement;var t=d.getAttribute('data-theme')==='dark'?'light':'dark';d.setAttribute('data-theme',t);localStorage.setItem('theme',t);})()">
+        <svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+        <svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+      </button>
+    </div>
+  </div>
+</nav>
+
+<!-- ===== HERO ===== -->
+<section class="hero">
+  <div class="wrap hero-inner">
+    <span class="label">Day 13 · Architecture</span>
+    <h1 class="hero-title">When the <em>model</em> becomes the <em>silicon</em>.</h1>
+    <p class="hero-tag">Taalas etches Llama 3.1 8B into transistors, streams tokens through physical wires, and skips the DRAM entirely. Here is how a fixed-function ASIC hits 17,000 tok/s, why AMD paid real money for it, and what changes when weights are no longer something you load.</p>
+    <ul class="hero-list">
+      <li>The single trick that removes the memory wall from inference.</li>
+      <li>Why "magic multiplier" transistors beat HBM at the right corner of the curve.</li>
+      <li>How the chip keeps a tiny SRAM budget for KV cache and LoRA.</li>
+      <li>Why AMD's August 2026 acquisition validates a real industry shift.</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ===== ONE-SENTENCE MODEL ===== -->
+<section style="padding-top: 56px;">
+  <div class="wrap">
+    <div class="callout">
+      <div class="callout-label">The model in one sentence</div>
+      Taalas turns the model's weight matrices into a literal mask layout on a chip, so multiplication is a current flowing through transistors that <em>are</em> the parameters, and tokens move through 32 physical layers of silicon with no DRAM weight reads in the path.
+    </div>
+  </div>
+</section>
+
+<!-- ===== MENTAL MODEL DIAGRAM ===== -->
+<section>
+  <div class="wrap">
+    <span class="label">Mental model</span>
+    <h2 class="section-h">A token is a signal flowing through fixed wires.</h2>
+    <p class="section-lede">Every layer of Llama is a physical region on the die. The input vector enters on the left, gets multiplied by weights that are <em>the transistors themselves</em>, and the result is handed to the next layer through a pipeline register. There is no place to "load weights from" because the weights never move.</p>
+
+    <div class="mental">
+      <svg viewBox="0 0 720 380" xmlns="http://www.w3.org/2000/svg" aria-label="Mental model: a token flowing through 32 etched layers of silicon">
+        <defs>
+          <linearGradient id="layerGrad" x1="0" x2="0" y1="0" y2="1">
+            <stop offset="0" stop-color="var(--accent)" stop-opacity="0.18"/>
+            <stop offset="1" stop-color="var(--accent)" stop-opacity="0.04"/>
+          </linearGradient>
+          <marker id="arrowR" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+            <path d="M0,0 L10,5 L0,10 z" style="fill:var(--accent)"/>
+          </marker>
+          <marker id="arrowRdim" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+            <path d="M0,0 L10,5 L0,10 z" style="fill:var(--text-3)"/>
+          </marker>
+        </defs>
+
+        <!-- input vector -->
+        <g transform="translate(40,170)">
+          <rect x="-6" y="-44" width="14" height="88" rx="3" style="fill:var(--bg-code);stroke:var(--border-strong)"/>
+          <text x="2" y="-58" text-anchor="middle" font-family="JetBrains Mono" font-size="10" style="fill:var(--text-3)">x₁</text>
+          <text x="2" y="60" text-anchor="middle" font-family="JetBrains Mono" font-size="10" style="fill:var(--text-3)">x_d</text>
+          <text x="0" y="80" text-anchor="middle" font-family="JetBrains Mono" font-size="10" style="fill:var(--text-2)">input vector</text>
+        </g>
+
+        <!-- layer stack -->
+        <g transform="translate(140,40)">
+          <!-- L1 -->
+          <g>
+            <rect x="0" y="0" width="380" height="34" rx="6" style="fill:url(#layerGrad);stroke:var(--accent);stroke-opacity:0.5"/>
+            <text x="10" y="20" font-family="JetBrains Mono" font-size="11" style="fill:var(--text-2)">Layer 1 / etched Q,K,V,O weights</text>
+            <animate attributeName="opacity" values="1;0.55;1" dur="2.4s" repeatCount="indefinite"/>
+          </g>
+          <!-- L2 -->
+          <g>
+            <rect x="0" y="44" width="380" height="34" rx="6" style="fill:url(#layerGrad);stroke:var(--accent);stroke-opacity:0.5"/>
+            <text x="10" y="64" font-family="JetBrains Mono" font-size="11" style="fill:var(--text-2)">Layer 2 / etched FFN up</text>
+            <animate attributeName="opacity" values="1;0.55;1" dur="2.4s" begin="0.3s" repeatCount="indefinite"/>
+          </g>
+          <!-- L3 -->
+          <g>
+            <rect x="0" y="88" width="380" height="34" rx="6" style="fill:url(#layerGrad);stroke:var(--accent);stroke-opacity:0.5"/>
+            <text x="10" y="108" font-family="JetBrains Mono" font-size="11" style="fill:var(--text-2)">Layer 3 / etched FFN down</text>
+            <animate attributeName="opacity" values="1;0.55;1" dur="2.4s" begin="0.6s" repeatCount="indefinite"/>
+          </g>
+          <!-- ... ellipsis row -->
+          <g>
+            <rect x="0" y="132" width="380" height="34" rx="6" style="fill:var(--bg-code);stroke:var(--border)"/>
+            <text x="190" y="153" text-anchor="middle" font-family="JetBrains Mono" font-size="11" style="fill:var(--text-3)">… 30 more layers etched the same way …</text>
+          </g>
+          <!-- output -->
+          <g>
+            <rect x="0" y="176" width="380" height="34" rx="6" style="fill:url(#layerGrad);stroke:var(--accent);stroke-opacity:0.5"/>
+            <text x="10" y="196" font-family="JetBrains Mono" font-size="11" style="fill:var(--text-2)">Layer 32 / final norm, argmax</text>
+            <animate attributeName="opacity" values="1;0.55;1" dur="2.4s" begin="0.9s" repeatCount="indefinite"/>
+          </g>
+
+          <!-- pipeline arrows between layers -->
+          <g style="stroke:var(--text-3)" stroke-width="1.2" fill="none">
+            <line x1="190" y1="34" x2="190" y2="44" marker-end="url(#arrowRdim)"/>
+            <line x1="190" y1="78" x2="190" y2="88" marker-end="url(#arrowRdim)"/>
+            <line x1="190" y1="122" x2="190" y2="132" marker-end="url(#arrowRdim)"/>
+            <line x1="190" y1="166" x2="190" y2="176" marker-end="url(#arrowRdim)"/>
+          </g>
+        </g>
+
+        <!-- moving token -->
+        <g>
+          <circle cy="6" style="fill:var(--accent)">
+            <animate attributeName="cx" from="40" height="248" dur="2.6s" repeatCount="indefinite"/>
+            <animate attributeName="cy" values="64;108;152;196;240" dur="2.6s" repeatCount="indefinite"/>
+            <animate attributeName="r" values="3;5;3;5;3" dur="2.6s" repeatCount="indefinite"/>
+          </circle>
+          <circle style="fill:var(--accent);opacity:0.35">
+            <animate attributeName="cx" from="40" height="248" dur="2.6s" repeatCount="indefinite"/>
+            <animate attributeName="cy" values="64;108;152;196;240" dur="2.6s" repeatCount="indefinite"/>
+            <animate attributeName="r" values="10;6;10;6;10" dur="2.6s" repeatCount="indefinite"/>
+          </circle>
+        </g>
+
+        <!-- output token -->
+        <g transform="translate(560,150)">
+          <rect x="-30" y="-30" width="80" height="60" rx="8" style="fill:var(--accent-soft);stroke:var(--accent)"/>
+          <text x="10" y="-2" text-anchor="middle" font-family="JetBrains Mono" font-size="14" font-weight="700" style="fill:var(--accent)">tok</text>
+          <text x="10" y="18" text-anchor="middle" font-family="Inter" font-size="11" style="fill:var(--text-2)">17,000 / s</text>
+        </g>
+
+        <!-- arrow from stack to output -->
+        <line x1="540" y1="150" x2="528" y2="150" style="stroke:var(--accent);stroke-width:2" marker-end="url(#arrowR)"/>
+
+        <!-- DRAM (struck through) -->
+        <g transform="translate(560,260)">
+          <rect x="0" y="0" width="100" height="36" rx="6" style="fill:none;stroke:var(--border-strong)"/>
+          <text x="50" y="14" text-anchor="middle" font-family="JetBrains Mono" font-size="10" style="fill:var(--text-3)">HBM / DRAM</text>
+          <text x="50" y="28" text-anchor="middle" font-family="JetBrains Mono" font-size="10" style="fill:var(--text-3)">(not in path)</text>
+          <line x1="-2" y1="-2" x2="102" y2="38" style="stroke:var(--warn);stroke-width:1.6;stroke-dasharray:4,3" opacity="0.7"/>
+        </g>
+
+        <!-- base caption -->
+        <text x="360" y="362" text-anchor="middle" font-family="Inter" font-size="12" style="fill:var(--text-3)">32 layers, each a fixed physical region. The token is a moving charge, not a loaded number.</text>
+      </svg>
+    </div>
+  </div>
+</section>
+
+<!-- ===== WALKTHROUGH ===== -->
+<section id="walkthrough">
+  <div class="wrap">
+    <span class="label">Walkthrough</span>
+    <h2 class="section-h">Six things you need to internalize.</h2>
+    <p class="section-lede">Each section below is one idea. Read the paragraph, look at the diagram, then read the aside. If you can re-explain each one out loud, you have the topic.</p>
+
+    <!-- 1. The memory wall -->
+    <div class="walk-item">
+      <div class="walk-text">
+        <h3>1. The memory wall is the whole problem.</h3>
+        <p>Modern GPUs spend most of their energy and most of their time waiting on HBM. The transformer math itself is cheap: a few teraflops of multiply-accumulate. The dominant cost is shipping 8 billion parameters across the package to the compute units, again and again, for every token. Llama 8B in FP16 needs roughly 16 GB of weight reads to generate a single token, and you do that 32 times for a 32-layer forward pass.</p>
+        <p>On an H100, those reads happen at ~3 TB/s. That is the bottleneck. The arithmetic units are mostly idle. You can shrink the model, you can quantize it, you can batch it. None of that touches the real problem: weights are in one place, computation is in another, and the link between them is the limiter.</p>
+      </div>
+      <div class="diagram-wrap">
+        <svg viewBox="0 0 600 220" xmlns="http://www.w3.org/2000/svg" aria-label="GPU is bottlenecked by weight shipping">
+          <!-- compute -->
+          <g transform="translate(40,80)">
+            <rect x="0" y="0" width="120" height="60" rx="10" style="fill:var(--accent-soft);stroke:var(--accent)"/>
+            <text x="60" y="25" text-anchor="middle" font-family="JetBrains Mono" font-size="12" style="fill:var(--text)">Compute</text>
+            <text x="60" y="44" text-anchor="middle" font-family="Inter" font-size="11" style="fill:var(--text-3)">mostly idle</text>
+          </g>
+          <!-- HBM -->
+          <g transform="translate(420,80)">
+            <rect x="0" y="0" width="140" height="60" rx="10" style="fill:var(--bg-code);stroke:var(--border-strong)"/>
+            <text x="70" y="25" text-anchor="middle" font-family="JetBrains Mono" font-size="12" style="fill:var(--text)">HBM weights</text>
+            <text x="70" y="44" text-anchor="middle" font-family="Inter" font-size="11" style="fill:var(--text-3)">16 GB / token</text>
+          </g>
+          <!-- shuttle pipe with constrained bandwidth -->
+          <line x1="160" y1="110" x2="420" y2="110" style="stroke:var(--warn);stroke-width:2.5" marker-end="url(#arrowR)" stroke-dasharray="6,4">
+            <animate attributeName="stroke-dashoffset" values="0;-20" dur="1s" repeatCount="indefinite"/>
+          </line>
+          <text x="290" y="100" text-anchor="middle" font-family="JetBrains Mono" font-size="11" style="fill:var(--warn)">~3 TB/s. This is the wall.</text>
+          <!-- 32 reads caption -->
+          <text x="300" y="180" text-anchor="middle" font-family="Inter" font-size="12" style="fill:var(--text-2)">×32 layers per token  =  512 GB of weight traffic</text>
+        </svg>
+      </div>
+      <div class="why">
+        <strong>Why this matters</strong>
+        Every serious inference optimization you have heard of (quantization, FlashAttention, paged KV cache, MoE routing) is a workaround for this wall. Taalas does not work around it. They collapse the wall by putting the weights <em>where the compute already is</em>.
+      </div>
+    </div>
+
+    <!-- 2. The "magic multiplier" transistor -->
+    <div class="walk-item">
+      <div class="walk-text">
+        <h3>2. One transistor per multiply, per weight.</h3>
+        <p>The classical way to do a 4-bit × 4-bit multiply needs at least 16 AND gates and an adder tree. That is fine on a GPU. Taalas claims a hardware scheme where a single transistor stores a 4-bit weight and performs its part of the multiplication in the analog domain, on the same device. The current the transistor passes is proportional to the weight value, and a sum line aggregates them across the array.</p>
+        <p>This is the load-bearing trick. Without it, putting 8 billion weights on a die at reasonable density is impossible. With it, you get a one-transistor-per-weight matrix multiply that fits in a small fraction of the silicon area a normal MAC unit would.</p>
+      </div>
+      <div class="diagram-wrap">
+        <svg viewBox="0 0 600 220" xmlns="http://www.w3.org/2000/svg" aria-label="Magic multiplier: one transistor per weight">
+          <!-- grid of weight cells -->
+          <g transform="translate(60,40)">
+            <text x="180" y="-12" text-anchor="middle" font-family="JetBrains Mono" font-size="11" style="fill:var(--text-3)">weight matrix as transistor grid</text>
+            <g>
+              <!-- generate 4x6 cells -->
+              <rect x="0" y="0" width="32" height="32" rx="3" style="fill:var(--accent-soft);stroke:var(--accent)"/>
+              <text x="16" y="20" text-anchor="middle" font-family="JetBrains Mono" font-size="9" style="fill:var(--accent)">w₁₁</text>
+              <rect x="36" y="0" width="32" height="32" rx="3" style="fill:var(--accent-soft);stroke:var(--accent)"/>
+              <text x="52" y="20" text-anchor="middle" font-family="JetBrains Mono" font-size="9" style="fill:var(--accent)">w₁₂</text>
+              <rect x="72" y="0" width="32" height="32" rx="3" style="fill:var(--accent-soft);stroke:var(--accent)"/>
+              <text x="88" y="20" text-anchor="middle" font-family="JetBrains Mono" font-size="9" style="fill:var(--accent)">w₁₃</text>
+              <rect x="108" y="0" width="32" height="32" rx="3" style="fill:var(--accent-soft);stroke:var(--accent)"/>
+              <text x="124" y="20" text-anchor="middle" font-family="JetBrains Mono" font-size="9" style="fill:var(--accent)">w₁₄</text>
+
+              <rect x="0" y="36" width="32" height="32" rx="3" style="fill:var(--accent-soft);stroke:var(--accent)"/>
+              <text x="16" y="56" text-anchor="middle" font-family="JetBrains Mono" font-size="9" style="fill:var(--accent)">w₂₁</text>
+              <rect x="36" y="36" width="32" height="32" rx="3" style="fill:var(--accent-soft);stroke:var(--accent)"/>
+              <text x="52" y="56" text-anchor="middle" font-family="JetBrains Mono" font-size="9" style="fill:var(--accent)">w₂₂</text>
+              <rect x="72" y="36" width="32" height="32" rx="3" style="fill:var(--accent-soft);stroke:var(--accent)"/>
+              <text x="88" y="56" text-anchor="middle" font-family="JetBrains Mono" font-size="9" style="fill:var(--accent)">w₂₃</text>
+              <rect x="108" y="36" width="32" height="32" rx="3" style="fill:var(--accent-soft);stroke:var(--accent)"/>
+              <text x="124" y="56" text-anchor="middle" font-family="JetBrains Mono" font-size="9" style="fill:var(--accent)">w₂₄</text>
+
+              <rect x="0" y="72" width="32" height="32" rx="3" style="fill:var(--accent-soft);stroke:var(--accent)"/>
+              <text x="16" y="92" text-anchor="middle" font-family="JetBrains Mono" font-size="9" style="fill:var(--accent)">w₃₁</text>
+              <rect x="36" y="72" width="32" height="32" rx="3" style="fill:var(--accent-soft);stroke:var(--accent)"/>
+              <text x="52" y="92" text-anchor="middle" font-family="JetBrains Mono" font-size="9" style="fill:var(--accent)">w₃₂</text>
+              <rect x="72" y="72" width="32" height="32" rx="3" style="fill:var(--accent-soft);stroke:var(--accent)"/>
+              <text x="88" y="92" text-anchor="middle" font-family="JetBrains Mono" font-size="9" style="fill:var(--accent)">w₃₃</text>
+              <rect x="108" y="72" width="32" height="32" rx="3" style="fill:var(--accent-soft);stroke:var(--accent)"/>
+              <text x="124" y="92" text-anchor="middle" font-family="JetBrains Mono" font-size="9" style="fill:var(--accent)">w₃₄</text>
+            </g>
+            <text x="70" y="132" text-anchor="middle" font-family="Inter" font-size="11" style="fill:var(--text-3)">each cell = 1 transistor</text>
+          </g>
+          <!-- input vector arrow -->
+          <line x1="200" y1="160" x2="260" y2="160" style="stroke:var(--text-2);stroke-width:1.5" marker-end="url(#arrowR)"/>
+          <text x="230" y="152" text-anchor="middle" font-family="JetBrains Mono" font-size="11" style="fill:var(--text-2)">x</text>
+          <!-- output dot -->
+          <g transform="translate(280,140)">
+            <rect x="0" y="0" width="180" height="50" rx="8" style="fill:var(--bg-code);stroke:var(--border-strong)"/>
+            <text x="90" y="20" text-anchor="middle" font-family="JetBrains Mono" font-size="12" style="fill:var(--text)">Σ wᵢⱼ · xᵢ</text>
+            <text x="90" y="38" text-anchor="middle" font-family="Inter" font-size="11" style="fill:var(--text-3)">current sums on a wire</text>
+          </g>
+          <line x1="380" y1="160" x2="480" y2="160" style="stroke:var(--accent);stroke-width:2" marker-end="url(#arrowR)"/>
+          <text x="430" y="152" text-anchor="middle" font-family="JetBrains Mono" font-size="11" style="fill:var(--accent)">result</text>
+        </svg>
+      </div>
+      <div class="why">
+        <strong>Why this matters</strong>
+        Standard analog compute-in-memory loses precision. Taalas claims 4-bit accuracy at the transistor level, which is enough for an already-quantized model. The whole play is "match the storage density to the math, in one device."
+      </div>
+    </div>
+
+    <!-- 3. No DRAM weights in the path -->
+    <div class="walk-item">
+      <div class="walk-text">
+        <h3>3. No DRAM weights in the path.</h3>
+        <p>Because the weights are the transistors, there is no place on the die to read them from. They just sit there, leaking current when the input arrives. The data path becomes: input vector flows in, gets transformed by the silicon, output flows out to the next layer. No load instruction. No memory bus. No controller.</p>
+        <p>The chip is not DRAM-free. It keeps a small amount of on-chip SRAM for the KV cache (the running context of the conversation) and for LoRA adapters that let you specialize the model for a downstream task without fabricating a new chip. The KV cache needs to be read and written, so it lives in normal memory. The weights do not.</p>
+      </div>
+      <div class="diagram-wrap">
+        <svg viewBox="0 0 600 200" xmlns="http://www.w3.org/2000/svg" aria-label="Data path with no DRAM weight reads">
+          <defs>
+            <marker id="arrL" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--accent)"/></marker>
+          </defs>
+          <!-- input -->
+          <g transform="translate(40,90)">
+            <rect x="0" y="0" width="80" height="40" rx="8" style="fill:var(--bg-code);stroke:var(--border-strong)"/>
+            <text x="40" y="24" text-anchor="middle" font-family="JetBrains Mono" font-size="12" style="fill:var(--text)">input x</text>
+          </g>
+          <!-- weight as silicon -->
+          <g transform="translate(180,40)">
+            <rect x="0" y="0" width="140" height="140" rx="12" style="fill:var(--accent-soft);stroke:var(--accent);stroke-width:1.5"/>
+            <text x="70" y="60" text-anchor="middle" font-family="JetBrains Mono" font-size="13" style="fill:var(--accent)">W (silicon)</text>
+            <text x="70" y="84" text-anchor="middle" font-family="Inter" font-size="11" style="fill:var(--text-2)">etched, fixed</text>
+            <text x="70" y="104" text-anchor="middle" font-family="Inter" font-size="11" style="fill:var(--text-2)">no read</text>
+          </g>
+          <!-- SRAM (kv cache) -->
+          <g transform="translate(380,40)">
+            <rect x="0" y="0" width="180" height="64" rx="10" style="fill:var(--bg-code);stroke:var(--border-strong)"/>
+            <text x="90" y="24" text-anchor="middle" font-family="JetBrains Mono" font-size="12" style="fill:var(--text)">on-chip SRAM</text>
+            <text x="90" y="42" text-anchor="middle" font-family="Inter" font-size="11" style="fill:var(--text-2)">KV cache + LoRA</text>
+            <text x="90" y="58" text-anchor="middle" font-family="Inter" font-size="10" style="fill:var(--text-3)">small, normal memory</text>
+          </g>
+          <!-- arrows -->
+          <line x1="120" y1="110" x2="180" y2="110" style="stroke:var(--accent);stroke-width:1.8" marker-end="url(#arrL)"/>
+          <line x1="320" y1="110" x2="380" y2="84" style="stroke:var(--text-2);stroke-width:1.5;stroke-dasharray:4,3"/>
+          <line x1="320" y1="110" x2="380" y2="120" style="stroke:var(--accent);stroke-width:1.8" marker-end="url(#arrL)"/>
+          <text x="350" y="105" text-anchor="middle" font-family="JetBrains Mono" font-size="10" style="fill:var(--text-3)">attend</text>
+          <!-- output -->
+          <g transform="translate(380,140)">
+            <rect x="0" y="0" width="180" height="44" rx="8" style="fill:var(--bg-code);stroke:var(--border-strong)"/>
+            <text x="90" y="28" text-anchor="middle" font-family="JetBrains Mono" font-size="12" style="fill:var(--text)">next layer</text>
+          </g>
+          <!-- DRAM struck out -->
+          <g transform="translate(40,180)" opacity="0.7">
+            <rect x="0" y="0" width="80" height="20" rx="4" style="fill:none;stroke:var(--border-strong)"/>
+            <text x="40" y="14" text-anchor="middle" font-family="JetBrains Mono" font-size="10" style="fill:var(--text-3)">DRAM weights</text>
+            <line x1="-2" y1="-2" x2="82" y2="22" style="stroke:var(--warn);stroke-width:1.4;stroke-dasharray:3,2"/>
+          </g>
+        </svg>
+      </div>
+      <div class="why">
+        <strong>Why this matters</strong>
+        When the weights are not memory, you stop optimizing the wrong thing. KV cache still needs SRAM and clever scheduling. Weights just need to be there. Removing DRAM from the equation removes the dominant cost, the dominant energy bill, and the dominant reason inference is slow.
+      </div>
+    </div>
+
+    <!-- 4. The mask-flow pipeline -->
+    <div class="walk-item">
+      <div class="walk-text">
+        <h3>4. Layers are arranged top-to-bottom on the die.</h3>
+        <p>Taalas does not literally print one layer per square millimeter; they physically layout all 32 transformer blocks on the die as sequential regions. The signal enters the bottom of layer 1, the pipeline registers clock it into layer 2, and so on. There is no scheduler picking layers to run. There is no batching of requests. There is one wire path, and it always runs the same model.</p>
+        <p>This is why the chip is a fixed-function ASIC. It cannot run a different model. It cannot serve a different shape. It is a CD-ROM for one specific neural network, manufactured once. The "operating system" of the chip is the input prompt and the clock.</p>
+      </div>
+      <div class="diagram-wrap">
+        <svg viewBox="0 0 600 280" xmlns="http://www.w3.org/2000/svg" aria-label="Sequential mask layers top to bottom">
+          <!-- die -->
+          <g transform="translate(60,30)">
+            <rect x="0" y="0" width="200" height="240" rx="10" style="fill:var(--bg-code);stroke:var(--border-strong)"/>
+            <text x="100" y="16" text-anchor="middle" font-family="JetBrains Mono" font-size="10" style="fill:var(--text-3)">Taalas die</text>
+            <!-- layer strips -->
+            <g>
+              <rect x="12" y="28" width="176" height="22" rx="3" style="fill:var(--accent-soft);stroke:var(--accent);stroke-opacity:0.6"/>
+              <text x="100" y="42" text-anchor="middle" font-family="JetBrains Mono" font-size="10" style="fill:var(--text-2)">L1 mask</text>
+
+              <rect x="12" y="54" width="176" height="22" rx="3" style="fill:var(--accent-soft);stroke:var(--accent);stroke-opacity:0.6"/>
+              <text x="100" y="68" text-anchor="middle" font-family="JetBrains Mono" font-size="10" style="fill:var(--text-2)">L2 mask</text>
+
+              <rect x="12" y="80" width="176" height="22" rx="3" style="fill:var(--accent-soft);stroke:var(--accent);stroke-opacity:0.6"/>
+              <text x="100" y="94" text-anchor="middle" font-family="JetBrains Mono" font-size="10" style="fill:var(--text-2)">L3 mask</text>
+
+              <rect x="12" y="106" width="176" height="22" rx="3" style="fill:var(--accent-soft);stroke:var(--accent);stroke-opacity:0.6"/>
+              <text x="100" y="120" text-anchor="middle" font-family="JetBrains Mono" font-size="10" style="fill:var(--text-2)">…</text>
+
+              <rect x="12" y="132" width="176" height="22" rx="3" style="fill:var(--accent-soft);stroke:var(--accent);stroke-opacity:0.6"/>
+              <text x="100" y="146" text-anchor="middle" font-family="JetBrains Mono" font-size="10" style="fill:var(--text-2)">L31 mask</text>
+
+              <rect x="12" y="158" width="176" height="22" rx="3" style="fill:var(--accent-soft);stroke:var(--accent);stroke-opacity:0.6"/>
+              <text x="100" y="172" text-anchor="middle" font-family="JetBrains Mono" font-size="10" style="fill:var(--text-2)">L32 mask</text>
+
+              <rect x="12" y="184" width="176" height="22" rx="3" style="fill:var(--accent-soft);stroke:var(--accent);stroke-opacity:0.6"/>
+              <text x="100" y="198" text-anchor="middle" font-family="JetBrains Mono" font-size="10" style="fill:var(--text-2)">unembed</text>
+
+              <rect x="12" y="210" width="176" height="22" rx="3" style="fill:var(--accent);stroke:var(--accent)"/>
+              <text x="100" y="224" text-anchor="middle" font-family="JetBrains Mono" font-size="10" font-weight="600" style="fill:var(--bg)">argmax → token</text>
+            </g>
+            <!-- flow line -->
+            <line x1="100" y1="26" x2="100" y2="234" style="stroke:var(--accent);stroke-width:1.5;stroke-dasharray:3,3;opacity:0.4"/>
+            <circle cy="0" r="3.5" style="fill:var(--accent)">
+              <animate attributeName="cy" values="26;54;80;106;132;158;184;210;234" dur="2.6s" repeatCount="indefinite"/>
+              <animate attributeName="cx" values="220;220;220;220;220;220;220;220;220" dur="2.6s" repeatCount="indefinite"/>
+            </circle>
+          </g>
+          <!-- arrows -->
+          <g style="stroke:var(--text-3);stroke-width:1.2;fill:none">
+            <line x1="40" y1="200" x2="56" y2="200" marker-end="url(#arrowRdim)"/>
+            <line x1="40" y1="80" x2="56" y2="80" marker-end="url(#arrowRdim)"/>
+          </g>
+          <text x="40" y="74" text-anchor="end" font-family="JetBrains Mono" font-size="11" style="fill:var(--text-2)">prompt</text>
+          <text x="40" y="194" text-anchor="end" font-family="JetBrains Mono" font-size="11" style="fill:var(--text-2)">next</text>
+
+          <!-- comparison box -->
+          <g transform="translate(320,40)">
+            <rect x="0" y="0" width="240" height="220" rx="10" style="fill:var(--bg);stroke:var(--border-strong)"/>
+            <text x="120" y="22" text-anchor="middle" font-family="JetBrains Mono" font-size="11" style="fill:var(--text-3)">vs. a GPU running the same model</text>
+
+            <g transform="translate(20,40)">
+              <rect x="0" y="0" width="200" height="22" rx="4" style="fill:var(--bg-code);stroke:var(--border)"/>
+              <text x="100" y="14" text-anchor="middle" font-family="JetBrains Mono" font-size="10" style="fill:var(--text-2)">load W₁ from HBM</text>
+            </g>
+            <g transform="translate(20,68)">
+              <rect x="0" y="0" width="200" height="22" rx="4" style="fill:var(--bg-code);stroke:var(--border)"/>
+              <text x="100" y="14" text-anchor="middle" font-family="JetBrains Mono" font-size="10" style="fill:var(--text-2)">load W₂ from HBM</text>
+            </g>
+            <g transform="translate(20,96)">
+              <rect x="0" y="0" width="200" height="22" rx="4" style="fill:var(--bg-code);stroke:var(--border)"/>
+              <text x="100" y="14" text-anchor="middle" font-family="JetBrains Mono" font-size="10" style="fill:var(--text-2)">…</text>
+            </g>
+            <g transform="translate(20,124)">
+              <rect x="0" y="0" width="200" height="22" rx="4" style="fill:var(--bg-code);stroke:var(--border)"/>
+              <text x="100" y="14" text-anchor="middle" font-family="JetBrains Mono" font-size="10" style="fill:var(--text-2)">load W₃₂ from HBM</text>
+            </g>
+            <text x="120" y="172" text-anchor="middle" font-family="Inter" font-size="11" style="fill:var(--text-2)">32 weight reads</text>
+            <text x="120" y="190" text-anchor="middle" font-family="Inter" font-size="11" style="fill:var(--text-2)">× every token</text>
+            <text x="120" y="208" text-anchor="middle" font-family="JetBrains Mono" font-size="10" style="fill:var(--warn)">~512 GB traffic</text>
+          </g>
+        </svg>
+      </div>
+      <div class="why">
+        <strong>Why this matters</strong>
+        Specialization buys you speed only because it removes decisions. There is no batching scheduler, no paged-attention kernel, no MoE router. The die <em>is</em> the inference loop. That is also its biggest product limitation, which is why the LoRA SRAM exists.
+      </div>
+    </div>
+
+    <!-- 5. ASIC mask flow economics -->
+    <div class="walk-item">
+      <div class="walk-text">
+        <h3>5. Custom masks, not custom chips.</h3>
+        <p>A naive objection: fabricating a chip for every model would take years and cost millions. Taalas designed a generic base die of logic gates and used the top metal layers (the "masks") to specify the weights. Changing the masks is fast and cheap. Customizing a new Llama 8B variant took them about two months. In AI terms that is glacial. In ASIC terms that is heroic.</p>
+        <p>This is the business model. You still get the inference cost of an ASIC (no DRAM, no idle compute) but with iteration speed closer to a model release cycle than a tape-out cycle.</p>
+      </div>
+      <div class="diagram-wrap">
+        <svg viewBox="0 0 600 200" xmlns="http://www.w3.org/2000/svg" aria-label="Generic base die + custom top masks">
+          <!-- base die -->
+          <g transform="translate(60,40)">
+            <rect x="0" y="0" width="200" height="120" rx="10" style="fill:var(--bg-code);stroke:var(--border-strong)"/>
+            <text x="100" y="22" text-anchor="middle" font-family="JetBrains Mono" font-size="11" style="fill:var(--text-3)">base die (generic)</text>
+            <!-- grid -->
+            <g style="stroke:var(--border-strong);fill:none">
+              <line x1="20" y1="40" x2="180" y2="40"/>
+              <line x1="20" y1="60" x2="180" y2="60"/>
+              <line x1="20" y1="80" x2="180" y2="80"/>
+              <line x1="20" y1="100" x2="180" y2="100"/>
+              <line x1="40" y1="30" x2="40" y2="120"/>
+              <line x1="80" y1="30" x2="80" y2="120"/>
+              <line x1="120" y1="30" x2="120" y2="120"/>
+              <line x1="160" y1="30" x2="160" y2="120"/>
+            </g>
+            <text x="100" y="138" text-anchor="middle" font-family="Inter" font-size="11" style="fill:var(--text-2)">logic + transistor grid</text>
+          </g>
+          <!-- masks stacked above -->
+          <g transform="translate(310,30)">
+            <text x="120" y="-2" text-anchor="middle" font-family="JetBrains Mono" font-size="11" style="fill:var(--text-3)">top metal masks</text>
+
+            <g transform="translate(0,8)">
+              <rect x="0" y="0" width="240" height="22" rx="4" style="fill:var(--accent-soft);stroke:var(--accent);stroke-opacity:0.7"/>
+              <text x="120" y="14" text-anchor="middle" font-family="JetBrains Mono" font-size="10" style="fill:var(--accent)">mask → Llama 3.1 8B</text>
+              <animate attributeName="opacity" values="1;0.5;1" dur="2.2s" repeatCount="indefinite"/>
+            </g>
+            <g transform="translate(0,36)">
+              <rect x="0" y="0" width="240" height="22" rx="4" style="fill:var(--bg-code);stroke:var(--border)"/>
+              <text x="120" y="14" text-anchor="middle" font-family="JetBrains Mono" font-size="10" style="fill:var(--text-3)">mask → Qwen 7B</text>
+            </g>
+            <g transform="translate(0,64)">
+              <rect x="0" y="0" width="240" height="22" rx="4" style="fill:var(--bg-code);stroke:var(--border)"/>
+              <text x="120" y="14" text-anchor="middle" font-family="JetBrains Mono" font-size="10" style="fill:var(--text-3)">mask → Mistral 7B</text>
+            </g>
+            <g transform="translate(0,92)">
+              <rect x="0" y="0" width="240" height="22" rx="4" style="fill:var(--bg-code);stroke:var(--border)"/>
+              <text x="120" y="14" text-anchor="middle" font-family="JetBrains Mono" font-size="10" style="fill:var(--text-3)">mask → fine-tune</text>
+            </g>
+            <text x="120" y="138" text-anchor="middle" font-family="Inter" font-size="11" style="fill:var(--text-2)">≈ 2 months from spec to silicon</text>
+          </g>
+        </svg>
+      </div>
+      <div class="why">
+        <strong>Why this matters</strong>
+        The product pitch is not "we make chips." It is "we make chips the way TSMC makes retinas." Most of the cost is fixed across all models; the variable part is just the masks. That is the unit economics that makes AMD's acquisition defensible.
+      </div>
+    </div>
+
+    <!-- 6. The cost / latency numbers -->
+    <div class="walk-item">
+      <div class="walk-text">
+        <h3>6. The numbers, and what they actually prove.</h3>
+        <p>Taalas claims 17,000 tok/s on Llama 3.1 8B at 3 to 6 bit quantization, around 10× cheaper in ownership cost than GPU inference and around 10× less electricity. These are vendor numbers, but the architectural story explains why the shape of the curve is real. When you remove the DRAM weight traffic, the dominant term in your energy budget and your latency budget simply disappears. Quantization, speculative decoding, and FlashAttention were all nibbling at the edges of that term. Taalas deletes it.</p>
+        <p>The catch is the part where you pick one model and ship it. Fine-tuning, RLHF, new architectures, MoE experts: all of those mean a new mask set or a new die. The LoRA SRAM helps. The base-die-plus-masks split helps. But the chip is fundamentally married to one architecture, which is why AMD's play is to combine Taalas silicon with their GPU stack rather than replace it.</p>
+      </div>
+      <div class="diagram-wrap">
+        <svg viewBox="0 0 600 240" xmlns="http://www.w3.org/2000/svg" aria-label="Comparison of Taalas vs GPU on token throughput and energy">
+          <!-- bars -->
+          <g transform="translate(60,30)">
+            <text x="0" y="14" font-family="JetBrains Mono" font-size="11" style="fill:var(--text-3)">tokens / second (Llama 8B)</text>
+
+            <!-- GPU bar -->
+            <text x="0" y="50" font-family="Inter" font-size="12" style="fill:var(--text-2)">GPU (H100, batched)</text>
+            <rect x="180" y="36" width="60" height="22" rx="3" style="fill:var(--bg-code);stroke:var(--border-strong)"/>
+            <text x="246" y="51" font-family="JetBrains Mono" font-size="11" style="fill:var(--text-2)">~1,700</text>
+
+            <!-- Taalas bar -->
+            <text x="0" y="86" font-family="Inter" font-size="12" style="fill:var(--text-2)">Taalas ASIC</text>
+            <rect x="180" y="72" width="320" height="22" rx="3" style="fill:var(--accent)"/>
+            <text x="506" y="87" font-family="JetBrains Mono" font-size="11" style="fill:var(--accent)">17,000</text>
+            <rect x="180" y="72" width="320" height="22" rx="3" style="fill:var(--accent-soft)">
+              <animate attributeName="opacity" values="1;0.3;1" dur="1.6s" repeatCount="indefinite"/>
+            </rect>
+          </g>
+          <!-- energy -->
+          <g transform="translate(60,140)">
+            <text x="0" y="14" font-family="JetBrains Mono" font-size="11" style="fill:var(--text-3)">relative energy per token</text>
+            <g>
+              <rect x="0" y="32" width="60" height="22" rx="3" style="fill:var(--bg-code);stroke:var(--border-strong)"/>
+              <text x="76" y="48" font-family="JetBrains Mono" font-size="11" style="fill:var(--text-2)">GPU  ≈ 10×</text>
+              <rect x="200" y="32" width="24" height="22" rx="3" style="fill:var(--accent)"/>
+              <text x="232" y="48" font-family="JetBrains Mono" font-size="11" style="fill:var(--accent)">Taalas  1×</text>
+            </g>
+            <text x="0" y="80" font-family="Inter" font-size="11" style="fill:var(--text-2)">numbers from Taalas' public claims and the Hardcore Llama demo</text>
+          </g>
+        </svg>
+      </div>
+      <div class="why">
+        <strong>Why this matters</strong>
+        The 10× number is not magic. It is the DRAM weight reads disappearing. Anywhere in the inference stack that is bandwidth-bound, you can ask the same question: how much of this cost is moving weights around? Taalas bets that as models grow, that share only gets larger.
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<!-- ===== COMMON CONFUSIONS ===== -->
+<section id="confusions">
+  <div class="wrap">
+    <span class="label">Common confusions</span>
+    <h2 class="section-h">Things people get wrong about Taalas.</h2>
+    <p class="section-lede">The architectural claim is bold, so the wrong takes are loud. Here is what each one gets wrong.</p>
+
+    <div class="conf-grid">
+      <div class="conf-card">
+        <div class="conf-num">01 · analog compute</div>
+        <div class="conf-q">"Isn't this just analog compute? We tried that in the 90s."</div>
+        <div class="conf-a">Taalas is not claiming general analog computing. They are claiming a specific, narrow analog multiply inside an otherwise digital pipeline. The summation, layer sequencing, and token output are all digital. The "tried in the 90s" objection applies to chips that wanted to replace all of inference with analog. This replaces one operation per weight cell.</div>
+      </div>
+      <div class="conf-card">
+        <div class="conf-num">02 · rewritability</div>
+        <div class="conf-q">"How do you fine-tune the model after the chip ships?"</div>
+        <div class="conf-a">You don't retrain on the chip. The chip is married to one base model. What you can do is load LoRA adapter weights into the on-chip SRAM, which adjusts the effective behavior without re-etching. For architecture changes or major new releases, you fabricate a new mask set on the same base die.</div>
+      </div>
+      <div class="conf-card">
+        <div class="conf-num">03 · scale</div>
+        <div class="conf-q">"Will this work for a 70B or 405B model?"</div>
+        <div class="conf-a">The architecture scales with parameter count, not against it. A 70B model needs ~7× the transistor area of an 8B model at the same precision. The die has to be larger, the mask has to be more complex, and the yield economics get harder. There is no architectural reason it cannot work; there are cost and yield reasons to be careful about.</div>
+      </div>
+      <div class="conf-card">
+        <div class="conf-num">04 · replacement</div>
+        <div class="conf-q">"Does this mean GPUs are dead for inference?"</div>
+        <div class="conf-a">No. GPUs are general-purpose; this is single-purpose. AMD bought Taalas because they want a fast lane for production traffic (same model, thousands of users, predictable load) alongside the GPU lane for everything else. Think of it as a CD-ROM next to a CPU. The CPU is not dead. The CD-ROM is just better at one thing.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== WHERE TO GO NEXT ===== -->
+<section id="next">
+  <div class="wrap">
+    <span class="label">Where to go next</span>
+    <h2 class="section-h">Three followups worth your time.</h2>
+    <p class="section-lede">Pick one. Each of these will sharpen the model you just built.</p>
+
+    <ul class="next-list">
+      <li>
+        <a href="https://www.anuragk.com/blog/posts/Taalas.html" target="_blank" rel="noopener">
+          <div>
+            <div class="next-name">How Taalas "prints" LLM onto a chip (Anurag Kushwaha)</div>
+            <div class="next-where">anuragk.com · blog · 4 min</div>
+          </div>
+          <div class="next-arrow">→</div>
+        </a>
+      </li>
+      <li>
+        <a href="https://www.eetimes.com/taalas-specializes-to-extremes-for-extraordinary-token-speed/" target="_blank" rel="noopener">
+          <div>
+            <div class="next-name">EE Times: Taalas specializes to extremes</div>
+            <div class="next-where">eetimes.com · industry coverage · ~10 min</div>
+          </div>
+          <div class="next-arrow">→</div>
+        </a>
+      </li>
+      <li>
+        <a href="https://taalas.com/the-path-to-ubiquitous-ai/" target="_blank" rel="noopener">
+          <div>
+            <div class="next-name">The path to ubiquitous AI (Taalas)</div>
+            <div class="next-where">taalas.com · primary source · ~8 min</div>
+          </div>
+          <div class="next-arrow">→</div>
+        </a>
+      </li>
+    </ul>
+  </div>
+</section>
+
+<!-- ===== FOOTER ===== -->
+<footer>
+  <div class="wrap">
+    <span class="mono">Day 13</span> of the explainer series. Built by <span class="mono">Hermes</span> using the explainer-builder skill.
+  </div>
+</footer>
+
+</body>
+</html>
