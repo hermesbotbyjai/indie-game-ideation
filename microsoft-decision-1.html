@@ -1,0 +1,710 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Microsoft-Decision-1: the model that scores instead of chats</title>
+<meta name="description" content="A daily explainer on the new category of decision-scoring models, using Microsoft-Decision-1 as the worked example." />
+<script>
+  (function() {
+    try {
+      var t = localStorage.getItem('theme');
+      if (!t) { t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'; }
+      document.documentElement.setAttribute('data-theme', t);
+    } catch (e) {}
+  })();
+</script>
+<style>
+  :root {
+    --bg: #ffffff;
+    --ink: #0d0d0d;
+    --muted: #5a5a5a;
+    --faint: #8a8a8a;
+    --rule: rgba(13,13,13,0.08);
+    --rule-soft: rgba(13,13,13,0.05);
+    --surface: rgba(13,13,13,0.03);
+    --accent: #18E299;
+    --accent-deep: #0bb87a;
+    --accent-soft: rgba(24,226,153,0.10);
+    --hero-grad-a: rgba(24,226,153,0.10);
+    --hero-grad-b: rgba(24,226,153,0.00);
+    --code-bg: rgba(13,13,13,0.04);
+    --shadow: 0 1px 0 rgba(13,13,13,0.04), 0 8px 24px rgba(13,13,13,0.04);
+  }
+  html[data-theme="dark"] {
+    --bg: #0b0d0c;
+    --ink: #f3f3f3;
+    --muted: #9aa0a0;
+    --faint: #6a706f;
+    --rule: rgba(255,255,255,0.10);
+    --rule-soft: rgba(255,255,255,0.06);
+    --surface: rgba(255,255,255,0.03);
+    --accent: #2af5a8;
+    --accent-deep: #18E299;
+    --accent-soft: rgba(42,245,168,0.10);
+    --hero-grad-a: rgba(42,245,168,0.14);
+    --hero-grad-b: rgba(42,245,168,0.00);
+    --code-bg: rgba(255,255,255,0.05);
+    --shadow: 0 1px 0 rgba(255,255,255,0.05), 0 8px 24px rgba(0,0,0,0.45);
+  }
+  @media (prefers-color-scheme: dark) {
+    html:not([data-theme="light"]) {
+      --bg: #0b0d0c;
+      --ink: #f3f3f3;
+      --muted: #9aa0a0;
+      --faint: #6a706f;
+      --rule: rgba(255,255,255,0.10);
+      --rule-soft: rgba(255,255,255,0.06);
+      --surface: rgba(255,255,255,0.03);
+      --accent: #2af5a8;
+      --accent-deep: #18E299;
+      --accent-soft: rgba(42,245,168,0.10);
+      --hero-grad-a: rgba(42,245,168,0.14);
+      --hero-grad-b: rgba(42,245,168,0.00);
+      --code-bg: rgba(255,255,255,0.05);
+      --shadow: 0 1px 0 rgba(255,255,255,0.05), 0 8px 24px rgba(0,0,0,0.45);
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+    font-size: 17px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  a { color: var(--accent-deep); text-decoration: none; border-bottom: 1px solid var(--accent-soft); }
+  a:hover { border-bottom-color: var(--accent); }
+  code, kbd, .mono { font-family: 'Geist Mono', 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.92em; }
+  .wrap { max-width: 1200px; margin: 0 auto; padding: 0 24px; }
+
+  /* Nav */
+  .nav {
+    position: sticky; top: 0; z-index: 50;
+    backdrop-filter: saturate(180%) blur(14px);
+    background: color-mix(in srgb, var(--bg) 82%, transparent);
+    border-bottom: 1px solid var(--rule-soft);
+  }
+  .nav-inner { display: flex; align-items: center; justify-content: space-between; height: 56px; }
+  .brand { font-weight: 600; letter-spacing: -0.01em; display: flex; align-items: center; gap: 10px; }
+  .brand-dot { width: 10px; height: 10px; border-radius: 9999px; background: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
+  .nav-links { display: flex; gap: 18px; align-items: center; font-size: 14px; color: var(--muted); }
+  .nav-links a { color: var(--muted); border-bottom: none; }
+  .nav-links a:hover { color: var(--ink); }
+  .toggle {
+    border: 1px solid var(--rule); background: transparent; color: var(--ink);
+    border-radius: 9999px; padding: 6px 14px; font-size: 13px; cursor: pointer;
+    font-family: inherit; transition: border-color 200ms ease, background 200ms ease;
+  }
+  .toggle:hover { border-color: var(--accent); background: var(--accent-soft); }
+
+  /* Hero */
+  .hero {
+    position: relative;
+    padding: 96px 0 64px;
+    overflow: hidden;
+  }
+  .hero::before {
+    content: '';
+    position: absolute; inset: -120px 0 auto 0; height: 540px;
+    background: radial-gradient(60% 80% at 50% 0%, var(--hero-grad-a) 0%, var(--hero-grad-b) 70%);
+    pointer-events: none;
+    z-index: 0;
+    animation: heroGlow 9s ease-in-out infinite alternate;
+  }
+  @keyframes heroGlow { from { transform: translateY(0); opacity: 1; } to { transform: translateY(20px); opacity: 0.7; } }
+  @keyframes dotPulse {
+    0%, 100% { transform: scale(1); opacity: 1; }
+    50% { transform: scale(1.4); opacity: 0.6; }
+  }
+  @keyframes drawLine {
+    from { stroke-dashoffset: 200; }
+    to { stroke-dashoffset: 0; }
+  }
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes chipBob {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-3px); }
+  }
+  .chip { animation: chipBob 6s ease-in-out infinite; }
+  .get-list li { animation: fadeUp 0.6s ease-out both; }
+  .get-list li:nth-child(2) { animation-delay: 0.1s; }
+  .get-list li:nth-child(3) { animation-delay: 0.2s; }
+  .get-list li:nth-child(4) { animation-delay: 0.3s; }
+  .lede { animation: fadeUp 0.8s ease-out both; animation-delay: 0.15s; }
+  .hero-inner { position: relative; z-index: 1; max-width: 880px; }
+  .chip {
+    display: inline-block; font-family: 'Geist Mono', monospace; font-size: 11px;
+    letter-spacing: 0.14em; text-transform: uppercase; color: var(--accent-deep);
+    padding: 4px 10px; border: 1px solid var(--accent-soft); border-radius: 9999px;
+    background: var(--accent-soft);
+  }
+  h1 {
+    font-size: 64px; line-height: 1.05; letter-spacing: -0.025em;
+    margin: 22px 0 14px; font-weight: 600;
+  }
+  .lede { font-size: 21px; color: var(--muted); max-width: 760px; line-height: 1.45; }
+  .get-list { list-style: none; padding: 0; margin: 28px 0 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 24px; max-width: 760px; }
+  .get-list li { font-size: 15px; color: var(--ink); display: flex; gap: 10px; align-items: baseline; }
+  .get-list li::before { content: ''; width: 6px; height: 6px; border-radius: 9999px; background: var(--accent); flex: 0 0 6px; transform: translateY(-2px); }
+  @media (max-width: 720px) {
+    h1 { font-size: 44px; }
+    .lede { font-size: 18px; }
+    .get-list { grid-template-columns: 1fr; }
+  }
+
+  /* Sections */
+  section { padding: 64px 0; border-top: 1px solid var(--rule-soft); }
+  section h2 { font-size: 40px; line-height: 1.1; letter-spacing: -0.02em; margin: 0 0 18px; font-weight: 600; }
+  section h3 { font-size: 22px; line-height: 1.25; margin: 32px 0 10px; font-weight: 600; letter-spacing: -0.01em; }
+  section p { margin: 0 0 14px; color: var(--ink); }
+  section p.muted { color: var(--muted); }
+  .row { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: 36px; align-items: start; }
+  @media (max-width: 920px) { .row { grid-template-columns: 1fr; } }
+  .why {
+    border: 1px solid var(--rule-soft); border-radius: 16px; padding: 18px 18px;
+    background: var(--surface); font-size: 14px; color: var(--muted);
+  }
+  .why strong { display: block; color: var(--ink); font-family: 'Geist Mono', monospace; font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; margin-bottom: 6px; }
+  code { background: var(--code-bg); padding: 1px 6px; border-radius: 6px; }
+
+  /* Model line */
+  .model {
+    border: 1px solid var(--accent); border-radius: 16px; padding: 22px 24px;
+    background: linear-gradient(180deg, var(--accent-soft), transparent 70%);
+    font-size: 19px; line-height: 1.45;
+  }
+  .model .label { font-family: 'Geist Mono', monospace; font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--accent-deep); margin-bottom: 8px; }
+
+  /* Diagram containers */
+  figure { margin: 22px 0; padding: 0; }
+  .diagram-frame {
+    border: 1px solid var(--rule-soft); border-radius: 16px; padding: 22px;
+    background: var(--surface);
+  }
+  .diagram-frame svg { display: block; width: 100%; height: auto; }
+  figure.full .diagram-frame { padding: 28px; }
+  figcaption { font-size: 13px; color: var(--muted); margin-top: 10px; }
+  @media (min-width: 920px) { figure:not(.full) .diagram-frame { max-width: 760px; } }
+
+  /* Common confusions */
+  .conf-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 18px; }
+  @media (max-width: 760px) { .conf-grid { grid-template-columns: 1fr; } }
+  .conf {
+    border: 1px solid var(--rule-soft); border-radius: 16px; padding: 20px 22px;
+    background: var(--surface); transition: border-color 200ms ease, transform 200ms ease;
+  }
+  .conf:hover { border-color: var(--accent); transform: translateY(-2px); }
+  .conf .num {
+    display: inline-block; font-family: 'Geist Mono', monospace; font-size: 11px;
+    color: var(--accent-deep); letter-spacing: 0.14em; text-transform: uppercase;
+    border: 1px solid var(--accent-soft); padding: 3px 9px; border-radius: 9999px;
+    margin-bottom: 10px;
+  }
+  .conf h4 { margin: 0 0 6px; font-size: 17px; font-weight: 600; letter-spacing: -0.01em; }
+  .conf .wrong { color: var(--muted); text-decoration: line-through; text-decoration-color: var(--faint); }
+  .conf p { margin: 6px 0 0; color: var(--muted); font-size: 14.5px; }
+
+  /* Where to go next */
+  .next-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 12px; }
+  .next-list li {
+    border: 1px solid var(--rule-soft); border-radius: 16px; padding: 16px 20px;
+    background: var(--surface);
+  }
+  .next-list a { font-weight: 600; }
+  .next-list small { display: block; color: var(--muted); font-size: 13px; margin-top: 4px; }
+
+  /* Footer */
+  footer {
+    padding: 40px 0 80px; color: var(--muted); font-size: 13px; text-align: center;
+    border-top: 1px solid var(--rule-soft);
+  }
+
+  /* Reduced motion */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
+    .hero::before { animation: none; }
+  }
+</style>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+</head>
+<body>
+<nav class="nav">
+  <div class="wrap nav-inner">
+    <div class="brand"><span class="brand-dot"></span>
+      <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+        <path d="M 3 8 L 7 12 L 13 4" style="fill: none; stroke: var(--accent-deep); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round;">
+          <animate attributeName="stroke-dasharray" from="0,20" to="20,20" dur="1.2s" fill="freeze" />
+        </path>
+      </svg>
+      Hermes Explainer</div>
+    <div class="nav-links">
+      <a href="#model">The model</a>
+      <a href="#diagram">Diagram</a>
+      <a href="#walkthrough">Walkthrough</a>
+      <a href="#confusions">Confusions</a>
+      <button class="toggle" id="themeToggle" aria-label="Toggle theme">Theme</button>
+    </div>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="wrap hero-inner">
+    <span class="chip">
+      <svg viewBox="0 0 14 14" width="12" height="12" aria-hidden="true" style="vertical-align: -2px; margin-right: 4px;">
+        <circle cx="7" cy="7" r="5" style="fill: none; stroke: var(--accent-deep); stroke-width: 1.5;">
+          <animate attributeName="r" values="3.5;5.5;3.5" dur="2.4s" repeatCount="indefinite" />
+        </circle>
+        <circle cx="7" cy="7" r="1.6" style="fill: var(--accent-deep);">
+          <animate attributeName="opacity" values="0.4;1;0.4" dur="2.4s" repeatCount="indefinite" />
+        </circle>
+      </svg>
+      Day 13 &middot; Decision models
+    </span>
+    <h1>Microsoft-Decision-1: the model that scores instead of chats.</h1>
+    <p class="lede">A small, post-trained 9B model that takes a fixed list of answers and returns a calibrated probability for each one. The point isn't to write better prose. The point is to be 35&times faster than GPT-6 Sol at the boring, structured calls every AI agent already makes a hundred times per request.</p>
+    <ul class="get-list">
+      <li>What "decision model" actually means as a category</li>
+      <li>Why calibrated scores change how you build agent loops</li>
+      <li>The Qwen3.5-9B post-training trick that gets you there</li>
+      <li>Why $0.042 per million input tokens changes the math on routing</li>
+    </ul>
+  </div>
+</header>
+
+<main class="wrap">
+
+<section>
+  <div class="model">
+    <div class="label">The model in one sentence</div>
+    Microsoft-Decision-1 takes any "pick from a fixed set of options" prompt, runs a single forward pass on a post-trained Qwen3.5-9B, and returns a calibrated probability for every option, so the routing, classification, and grading calls inside your agents stop paying the latency and cost of a chat-tuned LLM.
+  </div>
+</section>
+
+<section id="diagram">
+  <h2>The mental model.</h2>
+  <p>Two systems, one problem. Most AI applications in 2026 route every small judgment through a <em>System Two</em> model that was trained to chat and reason. Microsoft-Decision-1 is the <em>System One</em> model: it doesn't reason, it scores. Once you see the split, the speed and cost claims fall out for free.</p>
+  <figure class="full">
+    <div class="diagram-frame">
+      <svg viewBox="0 0 1200 700" role="img" aria-labelledby="diag1-title">
+        <title id="diag1-title">System Two vs System One: how Decision-1 fits into an agent loop</title>
+
+        <!-- background grid -->
+        <rect x="0" y="0" width="1200" height="700" style="fill: var(--bg);" />
+
+        <!-- ground line -->
+        <line x1="60" y1="640" x2="1140" y2="640" style="stroke: var(--rule); stroke-width: 1;" />
+        <text x="60" y="668" style="fill: var(--muted); font-family: 'Geist Mono', monospace; font-size: 12px; letter-spacing: 0.12em;">AGENT LOOP</text>
+
+        <!-- System Two lane -->
+        <rect x="60" y="80" width="1080" height="220" rx="20"
+              style="fill: var(--surface); stroke: var(--rule); stroke-width: 1;" />
+        <text x="84" y="116" style="fill: var(--muted); font-family: 'Geist Mono', monospace; font-size: 12px; letter-spacing: 0.14em;">SYSTEM TWO — LLM</text>
+        <text x="84" y="540" style="fill: var(--muted); font-family: 'Geist Mono', monospace; font-size: 12px; letter-spacing: 0.14em;">SYSTEM ONE — DECISION MODEL</text>
+
+        <!-- System Two box: input -> reason -> chat -->
+        <g>
+          <rect x="120" y="160" width="180" height="100" rx="12"
+                style="fill: var(--bg); stroke: var(--rule); stroke-width: 1;" />
+          <text x="210" y="190" text-anchor="middle" style="fill: var(--ink); font-weight: 600;">Prompt</text>
+          <text x="210" y="218" text-anchor="middle" style="fill: var(--muted); font-size: 12px;">"classify this ticket"</text>
+          <text x="210" y="240" text-anchor="middle" style="fill: var(--muted); font-size: 12px;">+ reasoning trace</text>
+
+          <path d="M 300 210 L 380 210" style="stroke: var(--rule); stroke-width: 1.5; fill: none;" />
+          <path d="M 376 206 L 380 210 L 376 214" style="stroke: var(--rule); stroke-width: 1.5; fill: none;" />
+
+          <rect x="380" y="160" width="220" height="100" rx="12"
+                style="fill: var(--bg); stroke: var(--rule); stroke-width: 1;" />
+          <text x="490" y="190" text-anchor="middle" style="fill: var(--ink); font-weight: 600;">GPT-6 Sol</text>
+          <text x="490" y="218" text-anchor="middle" style="fill: var(--muted); font-size: 12px;">chain-of-thought</text>
+          <text x="490" y="240" text-anchor="middle" style="fill: var(--muted); font-size: 12px;">~2.0 s, $X /M tok</text>
+
+          <path d="M 600 210 L 680 210" style="stroke: var(--rule); stroke-width: 1.5; fill: none;" />
+          <path d="M 676 206 L 680 210 L 676 214" style="stroke: var(--rule); stroke-width: 1.5; fill: none;" />
+
+          <rect x="680" y="160" width="200" height="100" rx="12"
+                style="fill: var(--bg); stroke: var(--rule); stroke-width: 1;" />
+          <text x="780" y="190" text-anchor="middle" style="fill: var(--ink); font-weight: 600;">Free-form text</text>
+          <text x="780" y="218" text-anchor="middle" style="fill: var(--muted); font-size: 12px;">"This is urgent because..."</text>
+          <text x="780" y="240" text-anchor="middle" style="fill: var(--muted); font-size: 12px;">then we regex the answer</text>
+
+          <path d="M 880 210 L 960 210" style="stroke: var(--rule); stroke-width: 1.5; fill: none;" />
+          <path d="M 956 206 L 960 210 L 956 214" style="stroke: var(--rule); stroke-width: 1.5; fill: none;" />
+
+          <rect x="960" y="160" width="140" height="100" rx="14"
+                style="fill: var(--bg); stroke: var(--accent); stroke-width: 1.5;" />
+          <text x="1030" y="195" text-anchor="middle" style="fill: var(--ink); font-weight: 600;">Result</text>
+          <text x="1030" y="220" text-anchor="middle" style="fill: var(--muted); font-size: 12px;">"urgent"</text>
+          <text x="1030" y="240" text-anchor="middle" style="fill: var(--accent-deep); font-size: 11px; font-family: 'Geist Mono', monospace;">~2.0 s</text>
+        </g>
+
+        <!-- divider -->
+        <line x1="60" y1="360" x2="1140" y2="360" style="stroke: var(--rule); stroke-dasharray: 4 6;" />
+
+        <!-- System One lane -->
+        <rect x="60" y="400" width="1080" height="220" rx="20"
+              style="fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1;" />
+
+        <g>
+          <rect x="120" y="450" width="220" height="120" rx="20"
+                style="fill: var(--bg); stroke: var(--rule); stroke-width: 1;" />
+          <text x="230" y="480" text-anchor="middle" style="fill: var(--ink); font-weight: 600;">Prompt + options</text>
+          <text x="230" y="500" text-anchor="middle" style="fill: var(--muted); font-size: 12px;">"urgent / normal / low"</text>
+          <text x="230" y="520" text-anchor="middle" style="fill: var(--muted); font-size: 12px;">3 candidates, fixed list</text>
+          <text x="230" y="555" text-anchor="middle" style="fill: var(--muted); font-size: 11px; font-family: 'Geist Mono', monospace;">structured API call</text>
+
+          <path d="M 340 510 L 420 510" style="stroke: var(--accent); stroke-width: 2; fill: none;" />
+          <path d="M 416 506 L 420 510 L 416 514" style="stroke: var(--accent); stroke-width: 2; fill: none;" />
+
+          <rect x="420" y="450" width="240" height="120" rx="20"
+                style="fill: var(--bg); stroke: var(--accent); stroke-width: 2;" />
+          <text x="540" y="478" text-anchor="middle" style="fill: var(--ink); font-weight: 600;">Decision-1</text>
+          <text x="540" y="498" text-anchor="middle" style="fill: var(--muted); font-size: 12px;">Qwen3.5-9B, post-trained</text>
+          <text x="540" y="518" text-anchor="middle" style="fill: var(--muted); font-size: 12px;">single forward pass</text>
+          <text x="540" y="555" text-anchor="middle" style="fill: var(--accent-deep); font-size: 12px; font-family: 'Geist Mono', monospace;">~55 ms, no reasoning</text>
+
+          <path d="M 660 510 L 740 510" style="stroke: var(--accent); stroke-width: 2; fill: none;" />
+          <path d="M 736 506 L 740 510 L 736 514" style="stroke: var(--accent); stroke-width: 2; fill: none;" />
+
+          <rect x="740" y="450" width="360" height="120" rx="20"
+                style="fill: var(--bg); stroke: var(--rule); stroke-width: 1;" />
+          <text x="920" y="475" text-anchor="middle" style="fill: var(--ink); font-weight: 600;">Calibrated probability vector</text>
+          <g transform="translate(770, 490)">
+            <rect x="0" y="20" width="100" height="14" rx="7" style="fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1;" />
+            <rect x="0" y="20" width="73" height="14" rx="7" style="fill: var(--accent);" />
+            <text x="50" y="14" text-anchor="middle" style="fill: var(--ink); font-family: 'Geist Mono', monospace; font-size: 11px;">urgent 0.73</text>
+
+            <rect x="120" y="20" width="100" height="14" rx="7" style="fill: var(--surface); stroke: var(--rule);" />
+            <rect x="120" y="20" width="22" height="14" rx="7" style="fill: var(--muted); opacity: 0.4;" />
+            <text x="170" y="14" text-anchor="middle" style="fill: var(--muted); font-family: 'Geist Mono', monospace; font-size: 11px;">normal 0.22</text>
+
+            <rect x="240" y="20" width="100" height="14" rx="7" style="fill: var(--surface); stroke: var(--rule);" />
+            <rect x="240" y="20" width="5" height="14" rx="7" style="fill: var(--muted); opacity: 0.4;" />
+            <text x="290" y="14" text-anchor="middle" style="fill: var(--muted); font-family: 'Geist Mono', monospace; font-size: 11px;">low 0.05</text>
+          </g>
+          <text x="920" y="552" text-anchor="middle" style="fill: var(--accent-deep); font-size: 12px; font-family: 'Geist Mono', monospace;">software reads the scores directly</text>
+        </g>
+
+        <!-- Time arrow -->
+        <line x1="60" y1="660" x2="1140" y2="660" style="stroke: var(--rule);" />
+        <polygon points="1140,656 1140,664 1146,660" style="fill: var(--muted);" />
+        <text x="1100" y="676" text-anchor="end" style="fill: var(--muted); font-family: 'Geist Mono', monospace; font-size: 11px;">time →</text>
+
+        <!-- legend -->
+        <g transform="translate(60, 30)">
+          <rect width="12" height="12" rx="3" style="fill: var(--accent-soft); stroke: var(--accent);" />
+            <text x="20" y="11" style="fill: var(--muted); font-size: 12px;">Decision-1 path</text>
+            <rect x="120" width="12" height="12" rx="3" style="fill: var(--bg); stroke: var(--rule);" />
+            <text x="140" y="11" style="fill: var(--muted); font-size: 12px;">LLM path</text>
+          </g>
+      </svg>
+    </div>
+    <figcaption>The same decision, taken through two systems. The LLM path generates prose and hopes you parse it. The decision path emits a probability vector your software can act on without re-parsing.</figcaption>
+  </figure>
+</section>
+
+<section id="walkthrough">
+  <h2>The walkthrough.</h2>
+  <p>Five things you need to know to actually use this thing, in the order you'll hit them.</p>
+
+  <h3>1. "Decision model" is a category, not a Microsoft invention.</h3>
+  <div class="row">
+    <div>
+      <p>The blog post calls Decision-1 the first of a new category. It isn't. The category has existed since at least H2O's decision-scoring work and got formalized as "System One" thinking earlier in 2026 by TypeSafe AI with their Jev model. What Microsoft did is take a serious open-weight base (Qwen3.5-9B), post-train it for one structured job, and ship it inside a Foundry endpoint that enterprise procurement already trusts.</p>
+      <p>The naming war matters less than the shift. Three vendors now compete on the same shape of API: hand the model a list, get probabilities back, do the routing in your own code.</p>
+    </div>
+    <aside class="why">
+      <strong>Why this matters</strong>
+      When a category gets a third serious entrant with Microsoft distribution, the LLM-as-router pattern starts to look like a planning bug. Most teams in 2026 still pay chat-model prices for routing calls. That's no longer the only option, or even the cheapest one.
+    </aside>
+  </div>
+  <figure>
+    <div class="diagram-frame">
+      <svg viewBox="0 0 760 220" role="img" aria-labelledby="diag2-title">
+        <title id="diag2-title">Category timeline</title>
+        <line x1="40" y1="130" x2="720" y2="130" style="stroke: var(--rule); stroke-width: 2;" />
+        <g>
+          <circle cx="120" cy="130" r="8" style="fill: var(--bg); stroke: var(--accent); stroke-width: 2;">
+            <animate attributeName="r" values="6;10;6" dur="3s" repeatCount="indefinite" />
+          </circle>
+          <text x="120" y="100" text-anchor="middle" style="fill: var(--ink); font-weight: 600;">H2O-Lightning</text>
+          <text x="120" y="170" text-anchor="middle" style="fill: var(--muted); font-family: 'Geist Mono', monospace; font-size: 11px;">Q1 2026</text>
+          <text x="120" y="190" text-anchor="middle" style="fill: var(--muted); font-size: 11px;">first public decision-scoring API</text>
+        </g>
+        <g>
+          <circle cx="380" cy="130" r="8" style="fill: var(--bg); stroke: var(--accent); stroke-width: 2;">
+            <animate attributeName="r" values="6;10;6" dur="3s" begin="0.8s" repeatCount="indefinite" />
+          </circle>
+          <text x="380" y="100" text-anchor="middle" style="fill: var(--ink); font-weight: 600;">Jev (TypeSafe AI)</text>
+          <text x="380" y="170" text-anchor="middle" style="fill: var(--muted); font-family: 'Geist Mono', monospace; font-size: 11px;">Sep 2026</text>
+          <text x="380" y="190" text-anchor="middle" style="fill: var(--muted); font-size: 11px;">"System One" framing, 70-500 ms</text>
+        </g>
+        <g>
+          <circle cx="640" cy="130" r="14" style="fill: var(--accent);">
+            <animate attributeName="r" values="12;18;12" dur="2.5s" repeatCount="indefinite" />
+          </circle>
+          <text x="640" y="100" text-anchor="middle" style="fill: var(--accent-deep); font-weight: 600;">Decision-1</text>
+          <text x="640" y="170" text-anchor="middle" style="fill: var(--muted); font-family: 'Geist Mono', monospace; font-size: 11px;">Oct 9 2026</text>
+          <text x="640" y="190" text-anchor="middle" style="fill: var(--muted); font-size: 11px;">Microsoft distribution, Qwen3.5-9B base</text>
+        </g>
+      </svg>
+    </div>
+    <figcaption>Three serious decision-scoring APIs in ten months. Each narrowed the gap between chat-models and classifiers for the routing decisions that every agent makes.</figcaption>
+  </figure>
+
+  <h3>2. The output is a probability vector, not text.</h3>
+  <div class="row">
+    <div>
+      <p>Decision-1 takes a structured API call, a prompt, and a list of allowed answers like "yes / no", "urgent / normal / low", "tool_a / tool_b / tool_c", or a rubric for grading an AI response. It returns one calibrated probability per option. The JSON you get back is already a routing decision. Your code can act on it without an extra parse step, without regex, and without a second model validating the first one.</p>
+      <p>Calibrated is the load-bearing word. The probabilities track real frequencies, so a 0.73 isn't a vibe, it's a guess you can threshold or average over a batch.</p>
+    </div>
+    <aside class="why">
+      <strong>Why this matters</strong>
+      Every LLM-as-classifier hack you've ever shipped (parse the verb, regex the JSON, retry on malformed output) exists to work around the fact that chat models emit prose. With calibrated probabilities, you can delete the parser.
+    </aside>
+  </div>
+  <figure>
+    <div class="diagram-frame">
+      <svg viewBox="0 0 760 260" role="img" aria-labelledby="diag3-title">
+        <title id="diag3-title">Probability vector layout</title>
+        <rect x="40" y="40" width="680" height="180" rx="14" style="fill: var(--surface); stroke: var(--rule);" />
+        <text x="60" y="68" style="fill: var(--muted); font-family: 'Geist Mono', monospace; font-size: 11px; letter-spacing: 0.14em;">REQUEST</text>
+        <text x="60" y="92" style="fill: var(--ink); font-size: 13px;">"Decide which action the agent should take for: customer says their invoice is wrong."</text>
+        <text x="60" y="116" style="fill: var(--muted); font-size: 13px;">options: <tspan style="fill: var(--ink); font-family: 'Geist Mono', monospace;">[refund_request, escalate_human, ignore]</tspan></text>
+
+        <line x1="40" y1="140" x2="720" y2="140" style="stroke: var(--rule);" />
+
+        <text x="60" y="160" style="fill: var(--muted); font-family: 'Geist Mono', monospace; font-size: 11px; letter-spacing: 0.14em;">RESPONSE</text>
+        <g transform="translate(60, 170)">
+          <rect x="0" y="0" width="200" height="32" rx="8" style="fill: var(--accent-soft); stroke: var(--accent);" />
+          <rect x="0" y="0" width="146" height="32" rx="8" style="fill: var(--accent);" />
+          <text x="100" y="20" text-anchor="middle" style="fill: var(--ink); font-family: 'Geist Mono', monospace; font-size: 12px;">refund 0.73</text>
+
+          <rect x="220" y="0" width="200" height="32" rx="8" style="fill: var(--surface); stroke: var(--rule);" />
+          <rect x="220" y="0" width="44" height="32" rx="8" style="fill: var(--muted); opacity: 0.4;" />
+          <text x="320" y="20" text-anchor="middle" style="fill: var(--muted); font-family: 'Geist Mono', monospace; font-size: 12px;">escalate 0.22</text>
+
+          <rect x="440" y="0" width="200" height="32" rx="8" style="fill: var(--surface); stroke: var(--rule);" />
+          <rect x="440" y="0" width="10" height="32" rx="8" style="fill: var(--muted); opacity: 0.4;" />
+          <text x="540" y="20" text-anchor="middle" style="fill: var(--muted); font-family: 'Geist Mono', monospace; font-size: 12px;">ignore 0.05</text>
+        </g>
+        <text x="60" y="220" style="fill: var(--muted); font-size: 12px;">probabilities sum to 1.0, calibrated against held-out benchmarks</text>
+      </svg>
+    </div>
+    <figcaption>Same JSON shape regardless of whether your options are yes/no, five-class, or a 10-point rating scale. The model is doing exactly one job.</figcaption>
+  </figure>
+
+  <h3>3. It's a 9B model post-trained on top of Qwen3.5-9B.</h3>
+  <div class="row">
+    <div>
+      <p>Decision-1 isn't a from-scratch architecture or even a from-scratch pretraining run. Microsoft took Qwen3.5-9B, an open-weight 9-billion-parameter base, and post-trained it for the structured-output head. The roadmap explicitly says the same trick will be re-applied on Microsoft AI's own models and on OpenAI base models.</p>
+      <p>This is the part that quietly undercuts the "Microsoft research breakthrough" framing. The architecture is Alibaba's. The training data and the evaluation harness are Microsoft's. The win is the recipe, not the substrate.</p>
+    </div>
+    <aside class="why">
+      <strong>Why this matters</strong>
+      For you as an architect: post-training a small open-weight base for a narrow job is the dominant cost pattern for the next two years. Decision-1 is the textbook example, not an exception.
+    </aside>
+  </div>
+  <figure>
+    <div class="diagram-frame">
+      <svg viewBox="0 0 760 220" role="img" aria-labelledby="diag4-title">
+        <title id="diag4-title">Post-training lineage</title>
+        <g transform="translate(40, 30)">
+          <rect x="0" y="0" width="200" height="160" rx="12" style="fill: var(--surface); stroke: var(--rule);" />
+          <text x="100" y="30" text-anchor="middle" style="fill: var(--muted); font-family: 'Geist Mono', monospace; font-size: 11px; letter-spacing: 0.14em;">PHASE 1 — PUBLIC</text>
+          <text x="100" y="62" text-anchor="middle" style="fill: var(--ink); font-weight: 600;">Qwen3.5-9B</text>
+          <text x="100" y="84" text-anchor="middle" style="fill: var(--muted); font-size: 12px;">Alibaba, open weights</text>
+          <text x="100" y="106" text-anchor="middle" style="fill: var(--muted); font-size: 12px;">9B params, Apache 2.0</text>
+          <text x="100" y="132" text-anchor="middle" style="fill: var(--accent-deep); font-size: 12px; font-family: 'Geist Mono', monospace;">general LM base</text>
+        </g>
+
+        <g>
+          <path d="M 250 110 L 380 110" style="stroke: var(--accent); stroke-width: 2; fill: none;" />
+          <path d="M 376 106 L 380 110 L 376 114" style="stroke: var(--accent); stroke-width: 2; fill: none;" />
+          <rect x="252" y="80" width="120" height="60" rx="10" style="fill: var(--accent-soft); stroke: var(--accent);" />
+          <text x="312" y="103" text-anchor="middle" style="fill: var(--accent-deep); font-weight: 600;">post-train</text>
+          <text x="312" y="125" text-anchor="middle" style="fill: var(--muted); font-size: 11px; font-family: 'Geist Mono', monospace;">SFT + cal.</text>
+        </g>
+
+        <g transform="translate(390, 30)">
+          <rect x="0" y="0" width="320" height="160" rx="12" style="fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.5;" />
+          <text x="160" y="30" text-anchor="middle" style="fill: var(--accent-deep); font-family: 'Geist Mono', monospace; font-size: 11px; letter-spacing: 0.14em;">PHASE 2 — MICROSOFT</text>
+          <text x="160" y="62" text-anchor="middle" style="fill: var(--ink); font-weight: 600;">Decision-1</text>
+          <text x="160" y="84" text-anchor="middle" style="fill: var(--muted); font-size: 12px;">150K blind-bench questions, 36 evals</text>
+          <text x="160" y="106" text-anchor="middle" style="fill: var(--muted); font-size: 12px;">rubric grading + calibration</text>
+          <text x="160" y="132" text-anchor="middle" style="fill: var(--accent-deep); font-size: 12px; font-family: 'Geist Mono', monospace;">decision-scoring specialist</text>
+        </g>
+
+        <g transform="translate(0, 200)">
+          <text x="40" y="0" style="fill: var(--muted); font-size: 12px;">Microsoft roadmap: rebase the same recipe on MAI and OpenAI bases.</text>
+        </g>
+      </svg>
+    </div>
+    <figcaption>The "Microsoft" part of Decision-1 is the post-training, not the base. That changes how you think about vendor lock-in for narrow-task models.</figcaption>
+  </figure>
+
+  <h3>4. The speed claim is a single-pass claim.</h3>
+  <div class="row">
+    <div>
+      <p>Decision-1 doesn't reason through the decision, then summarize the reasoning. There is no chain-of-thought. There is one forward pass through the 9B base, one softmax over the option logits, one JSON response. Microsoft measures it 4.5&times faster than Quyet-1.0-Large (the runner-up at the same job) and 35&times faster than GPT-6 Sol.</p>
+      <p>The H2O-Lightning-4B number is interesting on a different level. The runner-up is 4B. A 4B reasoning-tuned classifier got beat by a 9B post-trained non-reasoner. You can read that as "scale always wins" or as "reasoning was load-bearing only because no one had trained a non-reasoner for this job yet." Microsoft bet on the second reading, and the bet is paying.</p>
+    </div>
+    <aside class="why">
+      <strong>Why this matters</strong>
+      If your agent does ten classification calls per turn, dropping from 2.0 s to 55 ms each turns a 20-second turn into a 0.5-second turn. Latency budget is the thing that gates agent UX, and this changes it.
+    </aside>
+  </div>
+  <figure>
+    <div class="diagram-frame">
+      <svg viewBox="0 0 760 240" role="img" aria-labelledby="diag5-title">
+        <title id="diag5-title">Latency comparison: ten classification calls per agent turn</title>
+        <text x="40" y="32" style="fill: var(--muted); font-family: 'Geist Mono', monospace; font-size: 11px; letter-spacing: 0.14em;">10 CLASSIFICATION CALLS / TURN</text>
+        <line x1="40" y1="200" x2="720" y2="200" style="stroke: var(--rule); stroke-width: 1.5;" />
+        <g transform="translate(60, 60)">
+          <rect x="0" y="0" width="640" height="14" rx="7" style="fill: var(--surface); stroke: var(--rule);" />
+          <rect x="0" y="0" width="640" height="14" rx="7" style="fill: var(--accent);">
+            <animate attributeName="width" from="0" to="640" dur="1.4s" fill="freeze" />
+          </rect>
+          <text x="0" y="40" style="fill: var(--ink); font-weight: 600;">Decision-1</text>
+          <text x="640" y="40" text-anchor="end" style="fill: var(--accent-deep); font-family: 'Geist Mono', monospace; font-size: 12px;">~0.55 s / 10 calls</text>
+        </g>
+        <g transform="translate(60, 110)">
+          <rect x="0" y="0" width="320" height="14" rx="7" style="fill: var(--surface); stroke: var(--rule);" />
+          <rect x="0" y="0" width="320" height="14" rx="7" style="fill: var(--muted); opacity: 0.7;">
+            <animate attributeName="width" from="0" to="320" dur="1.4s" fill="freeze" />
+          </rect>
+          <text x="0" y="40" style="fill: var(--ink); font-weight: 600;">Quyet-1.0-Large</text>
+          <text x="320" y="40" text-anchor="end" style="fill: var(--muted); font-family: 'Geist Mono', monospace; font-size: 12px;">~2.5 s</text>
+        </g>
+        <g transform="translate(60, 160)">
+          <rect x="0" y="0" width="120" height="14" rx="7" style="fill: var(--surface); stroke: var(--rule);" />
+          <rect x="0" y="0" width="120" height="14" rx="7" style="fill: var(--muted); opacity: 0.4;">
+            <animate attributeName="width" from="0" to="120" dur="1.4s" fill="freeze" />
+          </rect>
+          <text x="0" y="40" style="fill: var(--ink); font-weight: 600;">GPT-6 Sol</text>
+          <text x="120" y="40" text-anchor="end" style="fill: var(--muted); font-family: 'Geist Mono', monospace; font-size: 12px;">~20 s</text>
+        </g>
+      </svg>
+    </div>
+    <figcaption>The 35x headline number is per call. Multiply by the number of classification calls a real agent makes per turn and the user-visible latency gap is the thing that decides product UX.</figcaption>
+  </figure>
+
+  <h3>5. Cost: $0.042 per million input tokens, output free.</h3>
+  <div class="row">
+    <div>
+      <p>Pricing is the second half of the pitch. Output tokens are free, which is the right shape for a model whose output is a JSON object three floats long. Per call, on the average 1K-token agent routing prompt, Decision-1 is roughly two orders of magnitude cheaper than GPT-6 Sol and several times cheaper than H2O-Lightning-4B.</p>
+      <p>But the interesting bit is the volume effect. The Xbox Research team used Decision-1 to sort 10K pieces of open-ended player feedback into themes, and reported quality competitive with GPT-5 at 80 to 100&times the speed. That's a workload nobody was doing with a frontier model because the unit economics didn't work. Decision-1 makes the workload economic.</p>
+    </div>
+    <aside class="why">
+      <strong>Why this matters</strong>
+      Pricing changes what your team is allowed to ship. A 100x cost drop turns "we'll only run the grader on the top 5% of candidates" into "we'll grade every candidate, every time." That unlocks whole product behaviors that weren't cost-effective before.
+    </aside>
+  </div>
+  <figure>
+    <div class="diagram-frame">
+      <svg viewBox="0 0 760 200" role="img" aria-labelledby="diag6-title">
+        <title id="diag6-title">Workloads that go from impossible to obvious when unit cost drops 100x</title>
+        <g>
+          <circle cx="120" cy="100" r="60" style="fill: var(--surface); stroke: var(--rule);" />
+          <text x="120" y="100" text-anchor="middle" style="fill: var(--muted); font-size: 12px;">before</text>
+          <text x="120" y="120" text-anchor="middle" style="fill: var(--muted); font-size: 11px; font-family: 'Geist Mono', monospace;">100K calls</text>
+          <text x="120" y="138" text-anchor="middle" style="fill: var(--accent-deep); font-size: 11px; font-family: 'Geist Mono', monospace;">$4,200</text>
+        </g>
+        <path d="M 200 100 L 320 100" style="stroke: var(--accent); stroke-width: 2; fill: none;" />
+        <polygon points="316,96 320,100 316,104" style="fill: var(--accent);" />
+        <g>
+          <circle cx="420" cy="100" r="60" style="fill: var(--accent);">
+            <animate attributeName="r" values="55;65;55" dur="3s" repeatCount="indefinite" />
+          </circle>
+          <text x="420" y="100" text-anchor="middle" style="fill: var(--ink); font-weight: 600;">after</text>
+          <text x="420" y="120" text-anchor="middle" style="fill: var(--ink); font-size: 11px; font-family: 'Geist Mono', monospace;">10M calls</text>
+          <text x="420" y="138" text-anchor="middle" style="fill: var(--ink); font-size: 11px; font-family: 'Geist Mono', monospace;">$420</text>
+        </g>
+        <text x="120" y="195" text-anchor="middle" style="fill: var(--muted); font-size: 12px;">frontier LLM pricing</text>
+        <text x="420" y="195" text-anchor="middle" style="fill: var(--muted); font-size: 12px;">Decision-1 pricing, same workload</text>
+      </svg>
+    </div>
+    <figcaption>The same budget now covers 100x the calls, which is what unlocks grading every response, sorting every ticket, and routing every tool call.</figcaption>
+  </figure>
+</section>
+
+<section id="confusions">
+  <h2>Common confusions.</h2>
+  <p>Things people keep getting wrong in the first hour of looking at this. Get them out of the way.</p>
+
+  <div class="conf-grid">
+    <div class="conf">
+      <span class="num">01</span>
+      <h4>"It's a smaller, faster LLM."</h4>
+      <p class="wrong">No. It is not chat-tuned and you should not prompt it like one.</p>
+      <p>Decision-1 has no instruction-following surface for free text. Give it a list of options and a request, get a probability vector back. If you ask it a question it can't score, it'll give you nonsense with confidence. Treat it like a logistic regression on a transformer substrate, not like a chat model that happens to be small.</p>
+    </div>
+    <div class="conf">
+      <span class="num">02</span>
+      <h4>"It's just a classifier."</h4>
+      <p class="wrong">Not in the scikit-learn sense, and that's the point.</p>
+      <p>A 2024 classifier was a single-label argmax with no calibrated probabilities. Decision-1 returns a full softmax that's calibrated against held-out benchmarks, supports open-ended option vocabularies per call, and accepts rubric-based grading of AI responses. That's a different shape than fit-predict on a CSV.</p>
+    </div>
+    <div class="conf">
+      <span class="num">03</span>
+      <h4>"Microsoft built the model."</h4>
+      <p class="wrong">The base is Alibaba's Qwen3.5-9B. Microsoft's contribution is the post-training.</p>
+      <p>Microsoft is open about this: the model is post-trained on Qwen3.5-9B, with future rebases planned on Microsoft AI and OpenAI bases. The vendor lock-in question for Decision-1 is mostly about the evaluation harness and the rubric schema, not the weights.</p>
+    </div>
+    <div class="conf">
+      <span class="num">04</span>
+      <h4>"It replaces my LLM."</h4>
+      <p class="wrong">It replaces. This is a routing model, not a reasoning model.</p>
+      <p>Decision-1 doesn't know how to summarize a document, draft an email, or walk through a multi-step plan. What it does is tell you, fast and cheaply, which of three tools your agent should call next. You still need System Two for the parts that need prose or planning. You just stop paying System Two prices for the parts that don't.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>Where to go next.</h2>
+  <p>If you want to actually try this rather than read about it.</p>
+  <ul class="next-list">
+    <li>
+      <a href="https://commandline.microsoft.com/microsoft-decision-1-model-foundry/">Microsoft's launch post (commandline.microsoft.com)</a>
+      <small>The primary source. Read the benchmark methodology section in full before you trust the 35x claim.</small>
+    </li>
+    <li>
+      <a href="https://ai.azure.com/catalog/models/Microsoft-Decision-1">Microsoft-Decision-1 in Microsoft Foundry</a>
+      <small>The production endpoint. 32K context, JSON output, text-input modality, listed as GA in the catalog.</small>
+    </li>
+    <li>
+      <a href="https://huggingface.co/Qwen/Qwen3.5-9B">Qwen3.5-9B on Hugging Face</a>
+      <small>The base model itself. If you want to understand the post-training surface, read the base model's chat template and output head. Most of what Decision-1 does is enforced by the template, not learned from scratch.</small>
+    </li>
+  </ul>
+</section>
+
+<footer>
+  Day 13 of the explainer series. Built by Hermes using the explainer-builder skill.
+</footer>
+
+</main>
+
+<script>
+  const btn = document.getElementById('themeToggle');
+  const root = document.documentElement;
+  function setTheme(t) {
+    root.setAttribute('data-theme', t);
+    try { localStorage.setItem('theme', t); } catch (e) {}
+    btn.textContent = t === 'dark' ? 'Light' : 'Dark';
+  }
+  btn.addEventListener('click', () => {
+    setTheme(root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
+  });
+  setTheme(root.getAttribute('data-theme') || 'light');
+</script>
+</body>
+</html>
