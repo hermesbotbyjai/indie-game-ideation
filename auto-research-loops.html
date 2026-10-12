@@ -1,0 +1,1004 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Auto-Research Loops: How Codex Won a 232x GPU Kernel Speedup</title>
+<meta name="description" content="A 12th-place finish out of 183 in a GPU kernel contest, with a 232x improvement over baseline, all driven by an LLM in a tight loop. Here's how auto-research actually works.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script>
+  (function () {
+    try {
+      var t = localStorage.getItem('theme');
+      if (t) document.documentElement.setAttribute('data-theme', t);
+      else if (window.matchMedia('(prefers-color-scheme: dark)').matches)
+        document.documentElement.setAttribute('data-theme', 'dark');
+    } catch (e) {}
+  })();
+</script>
+<style>
+  :root {
+    --bg: #ffffff;
+    --bg-soft: #f7f8f8;
+    --fg: #0d0d0d;
+    --fg-soft: #4a4a4a;
+    --fg-muted: #6b6b6b;
+    --border: rgba(13, 13, 13, 0.08);
+    --border-strong: rgba(13, 13, 13, 0.16);
+    --accent: #18E299;
+    --accent-soft: rgba(24, 226, 153, 0.12);
+    --accent-fg: #0a8a5b;
+    --danger: #d44a3d;
+    --grid: rgba(13, 13, 13, 0.04);
+    --code-bg: #f4f5f5;
+    --shadow: 0 1px 3px rgba(13, 13, 13, 0.04);
+    --shadow-lg: 0 12px 32px rgba(13, 13, 13, 0.08);
+  }
+  [data-theme="dark"] {
+    --bg: #0d0f10;
+    --bg-soft: #14171a;
+    --fg: #f5f5f5;
+    --fg-soft: #c0c0c0;
+    --fg-muted: #8a8a8a;
+    --border: rgba(255, 255, 255, 0.08);
+    --border-strong: rgba(255, 255, 255, 0.18);
+    --accent: #2af5a8;
+    --accent-soft: rgba(42, 245, 168, 0.14);
+    --accent-fg: #2af5a8;
+    --danger: #ff6a5d;
+    --grid: rgba(255, 255, 255, 0.03);
+    --code-bg: #1a1d20;
+    --shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+    --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.4);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme]) {
+      --bg: #0d0f10;
+      --bg-soft: #14171a;
+      --fg: #f5f5f5;
+      --fg-soft: #c0c0c0;
+      --fg-muted: #8a8a8a;
+      --border: rgba(255, 255, 255, 0.08);
+      --border-strong: rgba(255, 255, 255, 0.18);
+      --accent: #2af5a8;
+      --accent-soft: rgba(42, 245, 168, 0.14);
+      --accent-fg: #2af5a8;
+      --danger: #ff6a5d;
+      --grid: rgba(255, 255, 255, 0.03);
+      --code-bg: #1a1d20;
+      --shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+      --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.4);
+    }
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    background: var(--bg);
+    color: var(--fg);
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    overflow-x: hidden;
+  }
+  code, pre, .mono { font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace; }
+  a { color: var(--accent-fg); text-decoration: none; border-bottom: 1px solid transparent; transition: border-color .2s; }
+  a:hover { border-bottom-color: var(--accent); }
+
+  /* NAV */
+  nav.top {
+    position: sticky; top: 0; z-index: 100;
+    background: color-mix(in srgb, var(--bg) 85%, transparent);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--border);
+  }
+  .nav-inner {
+    max-width: 1200px; margin: 0 auto; padding: 14px 24px;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .logo { display: flex; align-items: center; gap: 10px; font-weight: 600; font-size: 14px; letter-spacing: -0.01em; }
+  .logo-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 12px var(--accent); }
+  .nav-right { display: flex; gap: 8px; align-items: center; }
+  .pill {
+    border: 1px solid var(--border);
+    border-radius: 9999px;
+    padding: 6px 14px;
+    font-size: 13px;
+    color: var(--fg-soft);
+    background: transparent;
+    cursor: pointer;
+    transition: all .2s;
+    font-family: inherit;
+  }
+  .pill:hover { border-color: var(--border-strong); color: var(--fg); }
+  .pill.accent { background: var(--accent); color: #062018; border-color: var(--accent); font-weight: 500; }
+  .pill.accent:hover { background: var(--accent); transform: translateY(-1px); }
+
+  /* HERO */
+  .hero {
+    position: relative;
+    padding: 96px 24px 64px;
+    max-width: 1200px;
+    margin: 0 auto;
+    overflow: hidden;
+  }
+  .hero::before {
+    content: '';
+    position: absolute;
+    top: -200px; left: 50%; transform: translateX(-50%);
+    width: 800px; height: 800px;
+    background: radial-gradient(circle, var(--accent-soft) 0%, transparent 60%);
+    pointer-events: none;
+    z-index: 0;
+  }
+  .hero-inner { position: relative; z-index: 1; max-width: 880px; margin: 0 auto; text-align: center; }
+  .label-chip {
+    display: inline-block;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--fg-muted);
+    padding: 6px 12px;
+    border: 1px solid var(--border);
+    border-radius: 9999px;
+    margin-bottom: 24px;
+  }
+  h1 {
+    font-size: 64px;
+    font-weight: 700;
+    letter-spacing: -0.03em;
+    line-height: 1.05;
+    margin-bottom: 16px;
+    color: var(--fg);
+  }
+  .tagline {
+    font-size: 20px;
+    color: var(--fg-soft);
+    margin-bottom: 32px;
+    max-width: 720px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+  .get-list {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    margin-top: 48px;
+    text-align: left;
+  }
+  .get-item {
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px;
+    background: var(--bg-soft);
+    font-size: 14px;
+    color: var(--fg-soft);
+    transition: border-color .2s, transform .2s;
+  }
+  .get-item:hover { border-color: var(--accent); transform: translateY(-2px); }
+  .get-item .num { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--fg-muted); display: block; margin-bottom: 6px; }
+  .get-item .ttl { color: var(--fg); font-weight: 500; display: block; margin-bottom: 4px; }
+
+  /* SECTIONS */
+  section.block {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 64px 24px;
+  }
+  .section-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--accent-fg);
+    margin-bottom: 16px;
+    display: block;
+  }
+  h2 {
+    font-size: 40px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    line-height: 1.15;
+    margin-bottom: 24px;
+    color: var(--fg);
+  }
+  p.lead { font-size: 18px; color: var(--fg-soft); margin-bottom: 32px; max-width: 760px; }
+  p { color: var(--fg-soft); margin-bottom: 16px; }
+
+  /* ONE-SENTENCE MODEL */
+  .one-sentence {
+    background: var(--bg-soft);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    border-radius: 8px;
+    padding: 32px 40px;
+    margin: 32px 0;
+    font-size: 22px;
+    line-height: 1.5;
+    color: var(--fg);
+    font-weight: 500;
+  }
+  .one-sentence strong { color: var(--accent-fg); font-weight: 600; }
+
+  /* MENTAL MODEL DIAGRAM */
+  .diagram-stage {
+    background: var(--bg-soft);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 40px 24px;
+    margin: 32px 0;
+    overflow-x: auto;
+  }
+  .diagram-stage svg { display: block; max-width: 100%; height: auto; margin: 0 auto; }
+
+  /* WALKTHROUGH */
+  .walk {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 24px;
+    margin-top: 32px;
+  }
+  .walk-item {
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 28px;
+    background: var(--bg);
+    transition: border-color .2s;
+  }
+  .walk-item:hover { border-color: var(--border-strong); }
+  .walk-item .step {
+    display: inline-block;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: var(--fg-muted);
+    border: 1px solid var(--border);
+    padding: 4px 10px;
+    border-radius: 9999px;
+    margin-bottom: 12px;
+  }
+  .walk-item h3 {
+    font-size: 24px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    margin-bottom: 12px;
+    color: var(--fg);
+  }
+  .walk-item p { font-size: 16px; margin-bottom: 16px; }
+  .walk-item .diagram { margin: 20px 0; }
+  .why {
+    margin-top: 16px;
+    padding: 14px 16px;
+    background: var(--accent-soft);
+    border-left: 3px solid var(--accent);
+    border-radius: 4px;
+    font-size: 14px;
+    color: var(--fg);
+  }
+  .why strong { color: var(--accent-fg); font-family: 'JetBrains Mono', monospace; font-size: 11px; letter-spacing: 0.15em; text-transform: uppercase; display: block; margin-bottom: 6px; font-weight: 600; }
+
+  /* COMMON CONFUSIONS */
+  .confusions {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 16px;
+    margin-top: 32px;
+  }
+  .confusion {
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px;
+    background: var(--bg-soft);
+  }
+  .confusion .q {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--fg);
+    margin-bottom: 12px;
+    display: flex;
+    gap: 10px;
+  }
+  .confusion .q .marker { color: var(--danger); font-family: 'JetBrains Mono', monospace; flex-shrink: 0; }
+  .confusion .a { font-size: 15px; color: var(--fg-soft); }
+  .confusion .a strong { color: var(--accent-fg); }
+
+  /* WHERE TO GO NEXT */
+  .nextups {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+    margin-top: 32px;
+  }
+  .nextup {
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+    background: var(--bg-soft);
+    transition: all .2s;
+    text-decoration: none;
+    color: var(--fg);
+    border-bottom: 1px solid var(--border);
+  }
+  .nextup:hover { border-color: var(--accent); transform: translateY(-2px); border-bottom-color: var(--accent); }
+  .nextup .label { font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--accent-fg); margin-bottom: 8px; display: block; }
+  .nextup h4 { font-size: 16px; font-weight: 600; margin-bottom: 8px; line-height: 1.3; }
+  .nextup .desc { font-size: 13px; color: var(--fg-muted); line-height: 1.5; }
+
+  /* FOOTER */
+  footer {
+    border-top: 1px solid var(--border);
+    padding: 32px 24px;
+    text-align: center;
+    color: var(--fg-muted);
+    font-size: 13px;
+    margin-top: 64px;
+  }
+
+  /* ANIMATIONS */
+  @keyframes pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.6; transform: scale(0.95); }
+  }
+  @keyframes spin-slow {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+  }
+  @keyframes flow {
+    0% { stroke-dashoffset: 30; }
+    100% { stroke-dashoffset: 0; }
+  }
+  @keyframes dash-flow {
+    to { stroke-dashoffset: -20; }
+  }
+  @keyframes score-grow {
+    0% { transform: scale(0.5); opacity: 0; }
+    50% { transform: scale(1.15); opacity: 1; }
+    100% { transform: scale(1); opacity: 1; }
+  }
+  @keyframes blink-soft {
+    0%, 100% { opacity: 0.4; }
+    50% { opacity: 1; }
+  }
+  @keyframes beam-shift {
+    0%, 100% { transform: translateX(0); }
+    50% { transform: translateX(4px); }
+  }
+  @keyframes oracle-flash {
+    0%, 90%, 100% { fill: var(--accent-soft); }
+    45% { fill: var(--accent); }
+  }
+  @keyframes agent-pulse {
+    0%, 100% { filter: drop-shadow(0 0 4px var(--accent-soft)); }
+    50% { filter: drop-shadow(0 0 12px var(--accent)); }
+  }
+  @keyframes log-append {
+    0% { opacity: 0; transform: translateY(-4px); }
+    100% { opacity: 1; transform: translateY(0); }
+  }
+  .anim-pulse { animation: pulse 2.4s ease-in-out infinite; transform-origin: center; transform-box: fill-box; }
+  .anim-spin { animation: spin-slow 8s linear infinite; transform-origin: center; transform-box: fill-box; }
+  .anim-flow { stroke-dasharray: 6 4; animation: dash-flow 1.2s linear infinite; }
+  .anim-grow { animation: score-grow 1.8s ease-out infinite; transform-origin: center; transform-box: fill-box; }
+  .anim-blink { animation: blink-soft 1.6s ease-in-out infinite; }
+  .anim-beam { animation: beam-shift 2s ease-in-out infinite; }
+  .anim-oracle { animation: oracle-flash 4s ease-in-out infinite; }
+  .anim-agent { animation: agent-pulse 3s ease-in-out infinite; }
+  .anim-log { animation: log-append 3s ease-out infinite; }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+
+  /* RESPONSIVE */
+  @media (max-width: 768px) {
+    h1 { font-size: 44px; }
+    h2 { font-size: 32px; }
+    .tagline { font-size: 17px; }
+    .get-list { grid-template-columns: repeat(2, 1fr); }
+    .confusions { grid-template-columns: 1fr; }
+    .nextups { grid-template-columns: 1fr; }
+    .one-sentence { padding: 24px; font-size: 18px; }
+    .hero { padding: 64px 16px 48px; }
+    section.block { padding: 48px 16px; }
+  }
+  @media (max-width: 480px) {
+    .get-list { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<nav class="top">
+  <div class="nav-inner">
+    <div class="logo">
+      <span class="logo-dot"></span>
+      <span>Hermes Explainer</span>
+    </div>
+    <div class="nav-right">
+      <button class="pill" id="theme-toggle" aria-label="Toggle theme">
+        <span id="theme-label">Dark</span>
+      </button>
+    </div>
+  </div>
+</nav>
+
+<!-- HERO -->
+<header class="hero">
+  <div class="hero-inner">
+    <span class="label-chip">Day 15 · Auto-Research Systems</span>
+    <h1>Auto-Research Loops</h1>
+    <p class="tagline">A solo developer, Codex, and a tight loop on a B200 kernel contest. 12th place out of 183, 232x faster than the baseline, 1,500 submissions over 14 days. The result is interesting. The method is the lesson.</p>
+    <div class="get-list">
+      <div class="get-item">
+        <span class="num">01</span>
+        <span class="ttl">The single-sentence shape</span>
+        Agent + oracle + harness = the auto-research loop. The model fills in iterations, the harness picks the objective.
+      </div>
+      <div class="get-item">
+        <span class="num">02</span>
+        <span class="ttl">When the loop is hill-climbable</span>
+        Why GPU kernels are the canonical use case. Why your problem probably isn't yet.
+      </div>
+      <div class="get-item">
+        <span class="num">03</span>
+        <span class="ttl">The harness is the product</span>
+        program.md, AGENTS.md, log.md. Standing instructions beat one-shot prompts.
+      </div>
+      <div class="get-item">
+        <span class="num">04</span>
+        <span class="ttl">Where loops break</span>
+        Local maxima, single-incumbent hill climbs, the "we've exhausted it" trap, and how to keep a beam alive.
+      </div>
+    </div>
+  </div>
+</header>
+
+<!-- ONE-SENTENCE MODEL -->
+<section class="block">
+  <span class="section-label">The model in one sentence</span>
+  <h2>One sentence, then we build on it.</h2>
+  <div class="one-sentence">
+    <strong>Auto-research</strong> is what happens when an LLM agent is wrapped in a tight optimization loop with a measurable oracle — a benchmark, a leaderboard, a verifier — and the <strong>harness</strong> (the objective, the eval, the standing instructions, the submission discipline) is the product, while the model just fills in iterations inside it.
+  </div>
+  <p>If you can write that sentence down, you've got the concept. Everything below is how to actually run one.</p>
+</section>
+
+<!-- MENTAL MODEL DIAGRAM -->
+<section class="block">
+  <span class="section-label">The mental model</span>
+  <h2>The loop, drawn once.</h2>
+  <p class="lead">Look at this picture every time you read a new auto-research story. Every loop looks like this. The variation is in what each block actually contains.</p>
+  <div class="diagram-stage">
+    <svg viewBox="0 0 720 480" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="The auto-research loop diagram">
+      <defs>
+        <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" style="fill: var(--accent-fg);"/>
+        </marker>
+      </defs>
+
+      <!-- Center hub label -->
+      <g transform="translate(360,40)">
+        <text text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="11" letter-spacing="3" style="fill: var(--fg-muted);">TIGHT FEEDBACK LOOP</text>
+      </g>
+
+      <!-- 6 nodes around a circle -->
+      <!-- Node 1: Objective (top) -->
+      <g transform="translate(360,100)">
+        <rect x="-80" y="-30" width="160" height="60" rx="10" style="fill: var(--bg); stroke: var(--accent); stroke-width: 2;" class="anim-oracle"/>
+        <text text-anchor="middle" y="-5" font-family="Inter" font-size="14" font-weight="600" style="fill: var(--fg);">OBJECTIVE</text>
+        <text text-anchor="middle" y="14" font-family="JetBrains Mono" font-size="10" style="fill: var(--fg-muted);">val_bpb · geomean µs</text>
+        <animate attributeName="stroke-opacity" values="1;0.5;1" dur="3s" repeatCount="indefinite"/>
+      </g>
+
+      <!-- Node 2: Harness (top right) -->
+      <g transform="translate(560,170)">
+        <rect x="-75" y="-15" width="150" height="60" rx="10" style="fill: var(--bg-soft); stroke: var(--border-strong); stroke-width: 1.5;"/>
+        <text text-anchor="middle" y="-2" font-family="Inter" font-size="13" font-weight="600" style="fill: var(--fg);">HARNESS</text>
+        <text text-anchor="middle" y="16" font-family="JetBrains Mono" font-size="9" style="fill: var(--fg-muted);">program.md · AGENTS.md</text>
+        <text text-anchor="middle" y="30" font-family="JetBrains Mono" font-size="9" style="fill: var(--fg-muted);">standing rules</text>
+        <animateTransform attributeName="transform" type="translate" values="560,170;560,168;560,170" dur="2.5s" repeatCount="indefinite"/>
+      </g>
+
+      <!-- Node 3: Agent (right) -->
+      <g transform="translate(610,310)">
+        <rect x="-70" y="-30" width="140" height="60" rx="10" style="fill: var(--accent); stroke: var(--accent); stroke-width: 2;" class="anim-pulse"/>
+        <text text-anchor="middle" y="-5" text-anchor="middle" font-family="Inter" font-size="14" font-weight="700" style="fill: #062018;">AGENT</text>
+        <text text-anchor="middle" y="14" font-family="JetBrains Mono" font-size="10" style="fill: #062018;">LLM · tools · /goal</text>
+      </g>
+
+      <!-- Node 4: Submission (bottom right) -->
+      <g transform="translate(540,430)">
+        <rect x="-75" y="-25" width="150" height="50" rx="10" style="fill: var(--bg); stroke: var(--border); stroke-width: 1.5;"/>
+        <text text-anchor="middle" y="-5" font-family="Inter" font-size="13" font-weight="500" style="fill: var(--fg);">SUBMISSION</text>
+        <text text-anchor="middle" y="14" font-family="JetBrains Mono" font-size="9" style="fill: var(--fg-muted);">code · kernel · config</text>
+      </g>
+
+      <!-- Node 5: Oracle / Eval (left bottom) -->
+      <g transform="translate(180,430)">
+        <rect x="-75" y="-25" width="150" height="50" rx="10" style="fill: var(--bg); stroke: var(--border); stroke-width: 1.5;" class="anim-agent"/>
+        <text text-anchor="middle" y="-5" font-family="Inter" font-size="13" font-weight="600" style="fill: var(--fg);">ORACLE</text>
+        <text text-anchor="middle" y="14" font-family="JetBrains Mono" font-size="9" style="fill: var(--fg-muted);">test + verify + time</text>
+      </g>
+
+      <!-- Node 6: Log / Memory (left) -->
+      <g transform="translate(110,310)">
+        <rect x="-70" y="-30" width="140" height="60" rx="10" style="fill: var(--bg-soft); stroke: var(--border-strong); stroke-width: 1.5;"/>
+        <text text-anchor="middle" y="-5" font-family="Inter" font-size="13" font-weight="600" style="fill: var(--fg);">LOG</text>
+        <text text-anchor="middle" y="14" font-family="JetBrains Mono" font-size="9" style="fill: var(--fg-muted);">results.tsv</text>
+        <text text-anchor="middle" y="28" font-family="JetBrains Mono" font-size="9" style="fill: var(--fg-muted);">what worked</text>
+      </g>
+
+      <!-- Node 7: Next Idea (top left) -->
+      <g transform="translate(160,170)">
+        <rect x="-75" y="-25" width="150" height="50" rx="10" style="fill: var(--bg); stroke: var(--border); stroke-width: 1.5;" class="anim-beam"/>
+        <text text-anchor="middle" y="-5" font-family="Inter" font-size="13" font-weight="500" style="fill: var(--fg);">NEXT IDEA</text>
+        <text text-anchor="middle" y="14" font-family="JetBrains Mono" font-size="9" style="fill: var(--fg-muted);">beam · mutate · retry</text>
+      </g>
+
+      <!-- Connecting arrows in a clockwise circle -->
+      <!-- Objective -> Harness -->
+      <path d="M 440,110 Q 510,130 525,155" style="fill: none; stroke: var(--accent-fg); stroke-width: 2;" class="anim-flow" marker-end="url(#arr)"/>
+      <!-- Harness -> Agent -->
+      <path d="M 565,225 Q 600,260 605,285" style="fill: none; stroke: var(--accent-fg); stroke-width: 2;" class="anim-flow" marker-end="url(#arr)"/>
+      <!-- Agent -> Submission -->
+      <path d="M 555,335 Q 520,395 520,408" style="fill: none; stroke: var(--accent-fg); stroke-width: 2;" class="anim-flow" marker-end="url(#arr)"/>
+      <!-- Submission -> Oracle -->
+      <path d="M 465,445 Q 360,490 255,445" style="fill: none; stroke: var(--accent-fg); stroke-width: 2;" class="anim-flow" marker-end="url(#arr)"/>
+      <!-- Oracle -> Log -->
+      <path d="M 180,408 Q 150,395 145,370" style="fill: none; stroke: var(--accent-fg); stroke-width: 2;" class="anim-flow" marker-end="url(#arr)"/>
+      <!-- Log -> Next Idea -->
+      <path d="M 125,285 Q 130,230 155,200" style="fill: none; stroke: var(--accent-fg); stroke-width: 2;" class="anim-flow" marker-end="url(#arr)"/>
+      <!-- Next Idea -> Objective -->
+      <path d="M 215,165 Q 280,130 280,108" style="fill: none; stroke: var(--accent-fg); stroke-width: 2;" class="anim-flow" marker-end="url(#arr)"/>
+
+      <!-- Tiny score badge in center showing improvement -->
+      <g transform="translate(360,260)">
+        <rect x="-65" y="-25" width="130" height="50" rx="8" style="fill: var(--bg); stroke: var(--accent); stroke-width: 1.5;" class="anim-grow"/>
+        <text text-anchor="middle" y="-5" font-family="JetBrains Mono" font-size="9" letter-spacing="2" style="fill: var(--fg-muted);">SCORE</text>
+        <text text-anchor="middle" y="15" font-family="JetBrains Mono" font-size="14" font-weight="700" style="fill: var(--accent-fg);">
+          419ms → 1.8ms
+          <animate attributeName="opacity" values="1;0.5;1" dur="2.4s" repeatCount="indefinite"/>
+        </text>
+      </g>
+    </svg>
+  </div>
+  <p>Read it clockwise. The agent submits something, the oracle judges it, the log records the result, a new idea is chosen, the harness steers it, the agent executes. One round = one submission. 1,500 submissions = 1,500 rounds = the entire contest.</p>
+</section>
+
+<!-- WALKTHROUGH -->
+<section class="block">
+  <span class="section-label">The walkthrough</span>
+  <h2>Five ideas, in order.</h2>
+
+  <div class="walk">
+
+    <!-- 1. The oracle makes the loop possible -->
+    <div class="walk-item">
+      <span class="step">Step 01</span>
+      <h3>The oracle makes the loop possible</h3>
+      <p>GPU kernels are the canonical auto-research target because two things are simultaneously true: the kernel either produces the right matrix or it doesn't, and the wall-clock time is a single number. Both halves of the feedback signal are <em>machine-verifiable</em>. No human review, no ambiguous taste call, no plausible-but-wrong output sitting in the log for weeks before someone notices.</p>
+      <p>This is what separates a hill-climbable problem from a research-taste problem. If your oracle requires a human to grade it, you don't have a loop, you have a feedback queue.</p>
+      <div class="diagram">
+        <svg viewBox="0 0 600 200" role="img" aria-label="Oracle verifiability spectrum" xmlns="http://www.w3.org/2000/svg">
+          <!-- spectrum bar -->
+          <rect x="50" y="80" width="500" height="20" rx="10" style="fill: var(--bg-soft); stroke: var(--border); stroke-width: 1;"/>
+          <!-- green region -->
+          <rect x="50" y="80" width="280" height="20" rx="10" style="fill: var(--accent); opacity: 0.35;"/>
+          <rect x="350" y="80" width="200" height="20" rx="10" style="fill: var(--danger); opacity: 0.25;"/>
+          <!-- markers -->
+          <g font-family="JetBrains Mono" font-size="10" style="fill: var(--fg-muted);">
+            <text x="190" y="70" text-anchor="middle">VERIFIABLE</text>
+            <text x="450" y="70" text-anchor="middle">AMBIGUOUS</text>
+          </g>
+          <g font-family="Inter" font-size="11" style="fill: var(--fg);">
+            <text x="80" y="135">unit tests</text>
+            <text x="170" y="135">benchmark µs</text>
+            <text x="270" y="135">compiler errors</text>
+            <text x="380" y="135">vibes</text>
+            <text x="470" y="135">"looks right"</text>
+            <text x="535" y="135" text-anchor="middle">taste</text>
+          </g>
+          <!-- boundary marker -->
+          <line x1="330" y1="60" x2="330" y2="120" style="stroke: var(--accent-fg); stroke-width: 2; stroke-dasharray: 4 3;"/>
+          <text x="330" y="50" text-anchor="middle" font-family="JetBrains Mono" font-size="9" letter-spacing="2" style="fill: var(--accent-fg);">LOOP-ABLE BOUNDARY</text>
+        </svg>
+      </div>
+      <div class="diagram">
+        <svg viewBox="0 0 600 200" role="img" aria-label="RL vs auto-research surface" xmlns="http://www.w3.org/2000/svg">
+          <!-- left column: RL -->
+          <g transform="translate(40,30)">
+            <rect width="220" height="140" rx="10" style="fill: var(--bg-soft); stroke: var(--border); stroke-width: 1.5;"/>
+            <text x="110" y="28" text-anchor="middle" font-family="JetBrains Mono" font-size="11" letter-spacing="2" style="fill: var(--fg-muted);">RL</text>
+            <!-- weights tensor shape -->
+            <g transform="translate(110,80)">
+                <rect x="-30" y="-20" width="60" height="40" rx="4" style="fill: var(--accent); opacity: 0.3; stroke: var(--accent); stroke-width: 1.5;"/>
+                <text x="0" y="5" text-anchor="middle" font-family="JetBrains Mono" font-size="11" font-weight="600" style="fill: var(--fg);">θ</text>
+                <text x="0" y="-30" text-anchor="middle" font-family="Inter" font-size="10" style="fill: var(--fg-muted);">model weights</text>
+                <animateTransform attributeName="transform" type="translate" values="110,80;110,82;110,80" dur="3s" repeatCount="indefinite"/>
+              </g>
+              <text x="110" y="125" text-anchor="middle" font-family="Inter" font-size="11" style="fill: var(--fg-soft);">gradient · reward</text>
+          </g>
+          <!-- right column: auto-research -->
+          <g transform="translate(340,30)">
+            <rect width="220" height="140" rx="10" style="fill: var(--bg-soft); stroke: var(--accent); stroke-width: 2;"/>
+            <text x="110" y="28" text-anchor="middle" font-family="JetBrains Mono" font-size="11" letter-spacing="2" style="fill: var(--accent-fg);">AUTO-RESEARCH</text>
+            <!-- code file shape -->
+            <g transform="translate(110,80)">
+                <rect x="-35" y="-22" width="70" height="44" rx="4" style="fill: var(--bg); stroke: var(--accent); stroke-width: 1.5;"/>
+                <line x1="-25" y1="-10" x2="20" y2="-10" style="stroke: var(--fg-muted); stroke-width: 1;"/>
+                <line x1="-25" y1="0" x2="20" y2="0" style="stroke: var(--fg-muted); stroke-width: 1;"/>
+                <line x1="-25" y1="10" x2="15" y2="10" style="stroke: var(--fg-muted); stroke-width: 1;"/>
+                <text x="0" y="-30" text-anchor="middle" font-family="Inter" font-size="10" style="fill: var(--fg-muted);">source code</text>
+                <animate attributeName="opacity" values="1;0.6;1" dur="2.4s" repeatCount="indefinite"/>
+              </g>
+            <text x="110" y="125" text-anchor="middle" font-family="Inter" font-size="11" style="fill: var(--fg-soft);">edit · score</text>
+          </g>
+          <!-- arrow between -->
+          <text x="300" y="105" text-anchor="middle" font-family="JetBrains Mono" font-size="20" font-weight="700" style="fill: var(--accent-fg);">≠</text>
+        </svg>
+      </div>
+      <div class="why">
+        <strong>Why this matters</strong>
+        Before you build a loop, ask: can I write a script that returns a number in under five minutes for arbitrary input? If not, your loop is going to stall waiting for humans.
+      </div>
+    </div>
+
+    <!-- 2. The harness is the product -->
+    <div class="walk-item">
+      <span class="step">Step 02</span>
+      <h3>The harness is the product</h3>
+      <p>Look at what Sankalp actually wrote. It's not clever prompting. It's three files: <code>problem_statement.md</code> (what to optimize), <code>AGENTS.md</code> (standing rules for the agent), <code>log.md</code> (bookkeeping of every submission, every shape, every result). Karpathy's <code>autoresearch</code> repo is the same shape: a single <code>program.md</code> the human edits, a <code>train.py</code> the agent edits, a fixed <code>prepare.py</code> nobody touches.</p>
+      <p>The human's prompt is the spec. The agent's prompt is a code file the human curated over weeks. The log is the agent's working memory across sessions.</p>
+      <div class="diagram">
+        <svg viewBox="0 0 600 220" role="img" aria-label="Harness file structure" xmlns="http://www.w3.org/2000/svg">
+          <!-- three file cards -->
+          <g transform="translate(40,30)">
+            <rect x="0" y="0" width="160" height="160" rx="10" style="fill: var(--bg-soft); stroke: var(--border); stroke-width: 1.5;"/>
+            <text x="80" y="28" text-anchor="middle" font-family="JetBrains Mono" font-size="10" letter-spacing="2" style="fill: var(--accent-fg);">HUMAN EDITS</text>
+            <text x="80" y="56" text-anchor="middle" font-family="JetBrains Mono" font-size="12" font-weight="600" style="fill: var(--fg);">program.md</text>
+            <line x1="20" y1="68" x2="140" y2="68" style="stroke: var(--border);"/>
+            <text x="80" y="88" text-anchor="middle" font-family="Inter" font-size="10" style="fill: var(--fg-muted);">objective, scope,</text>
+            <text x="80" y="103" text-anchor="middle" font-family="Inter" font-size="10" style="fill: var(--fg-muted);">budget, what</text>
+            <text x="80" y="118" text-anchor="middle" font-family="Inter" font-size="10" style="fill: var(--fg-muted);">counts as "better"</text>
+          </g>
+          <g transform="translate(220,30)">
+            <rect x="0" y="0" width="160" height="160" rx="10" style="fill: var(--bg); stroke: var(--accent); stroke-width: 2;" class="anim-pulse"/>
+            <text x="80" y="48" text-anchor="middle" font-family="JetBrains Mono" font-size="10" letter-spacing="2" style="fill: var(--accent-fg);">AGENT EDITS</text>
+            <text x="80" y="76" text-anchor="middle" font-family="JetBrains Mono" font-size="12" font-weight="600" style="fill: var(--fg);">train.py</text>
+            <line x1="20" y1="88" x2="140" y2="88" style="stroke: var(--border);"/>
+            <text x="80" y="108" text-anchor="middle" font-family="Inter" font-size="10" style="fill: var(--fg-muted);">architecture,</text>
+            <text x="80" y="123" text-anchor="middle" font-family="Inter" font-size="10" style="fill: var(--fg-muted);">hyperparams,</text>
+            <text x="80" y="138" text-anchor="middle" font-family="Inter" font-size="10" style="fill: var(--fg-muted);">kernel body</text>
+          </g>
+          <g transform="translate(400,30)">
+            <rect x="0" y="0" width="160" height="160" rx="10" style="fill: var(--bg-soft); stroke: var(--border); stroke-width: 1.5;"/>
+            <text x="160" y="28" text-anchor="middle" font-family="JetBrains Mono" font-size="10" letter-spacing="2" style="fill: var(--fg-muted);">NOBODY EDITS</text>
+            <text x="160" y="56" text-anchor="middle" font-family="JetBrains Mono" font-size="12" font-weight="600" style="fill: var(--fg);">prepare.py</text>
+            <line x1="20" y1="68" x2="140" y2="68" style="stroke: var(--border);"/>
+            <text x="160" y="88" text-anchor="middle" font-family="Inter" font-size="10" style="fill: var(--fg-muted);">data, eval,</text>
+            <text x="160" y="103" text-anchor="middle" font-family="Inter" font-size="10" style="fill: var(--fg-muted);">time budget,</text>
+            <text x="160" y="118" text-anchor="middle" font-family="Inter" font-size="10" style="fill: var(--fg-muted);">verifier ground truth</text>
+          </g>
+          <!-- arrows -->
+          <path d="M 200,110 L 220,110" style="stroke: var(--accent-fg); stroke-width: 2; fill: none;" marker-end="url(#arr)"/>
+          <path d="M 380,110 L 400,110" style="stroke: var(--accent-fg); stroke-width: 2; fill: none;" marker-end="url(#arr)"/>
+        </svg>
+      </div>
+      <div class="why">
+        <strong>Why this matters</strong>
+        Three files, three roles, one rule. The thing that's fixed (prepare.py / oracle) is the ground truth. The thing that moves (train.py / submission) is the search space. The thing the human owns (program.md / AGENTS.md) is the policy. Most failed auto-research attempts collapse because the policy is implicit, not written down.
+      </div>
+    </div>
+
+    <!-- 3. Beam of candidates, not single-incumbent -->
+    <div class="walk-item">
+      <span class="step">Step 03</span>
+      <h3>Beam of candidates, not single-incumbent hill climb</h3>
+      <p>The naive loop holds one incumbent and rejects everything that scores worse. That's the fastest way to get trapped. Sankalp calls this out as the bottleneck between 3,000 µs and 1,800 µs: "I kept a single best candidate against which new candidates were tested. If the agent tries a new structural idea, it's highly likely to score less than the current best. After a few iterations it may outperform — but we killed it on the first try."</p>
+      <p>The fix is a small beam (usually three to five) of live candidates. Each beam entry records parent, hypothesis, what changed, current best, and next combination. One beam exploits the current best. One beam is the near-miss. One beam is a high-risk structural attempt. Promotion is based on hypothesis validity plus enough data, not on immediate score.</p>
+      <div class="diagram">
+        <svg viewBox="0 0 600 220" role="img" aria-label="Beam of candidates" xmlns="http://www.w3.org/2000/svg">
+          <!-- column headers -->
+          <g font-family="JetBrains Mono" font-size="10" letter-spacing="2" style="fill: var(--fg-muted);">
+            <text x="120" y="25" text-anchor="middle">EXPLOIT</text>
+            <text x="300" y="25" text-anchor="middle">NEAR-MISS</text>
+            <text x="480" y="25" text-anchor="middle">STRUCTURAL</text>
+          </g>
+          <!-- 3 beams, 4 candidates stacked -->
+          <g transform="translate(70,40)">
+            <rect x="0" y="0" width="100" height="40" rx="6" style="fill: var(--accent); stroke: var(--accent);" class="anim-pulse"/>
+            <text x="50" y="25" text-anchor="middle" font-family="Inter" font-size="12" font-weight="600" style="fill: #062018;">incumbent 1.8k</text>
+          </g>
+          <g transform="translate(70,90)">
+            <rect x="0" y="0" width="100" height="40" rx="6" style="fill: var(--bg-soft); stroke: var(--border); stroke-width: 1.5;"/>
+            <text x="50" y="25" text-anchor="middle" font-family="Inter" font-size="11" style="fill: var(--fg-soft);">2.0k µs</text>
+          </g>
+          <g transform="translate(70,140)">
+            <rect x="0" y="0" width="100" height="40" rx="6" style="fill: var(--bg-soft); stroke: var(--border); stroke-width: 1.5;"/>
+            <text x="50" y="25" text-anchor="middle" font-family="Inter" font-size="11" style="fill: var(--fg-soft);">2.1k µs</text>
+          </g>
+
+          <g transform="translate(250,40)">
+            <rect x="0" y="0" width="100" height="40" rx="6" style="fill: var(--bg); stroke: var(--border-strong); stroke-width: 1.5;"/>
+            <text x="50" y="25" text-anchor="middle" font-family="Inter" font-size="11" style="fill: var(--fg-soft);">2.5k µs</text>
+          </g>
+          <g transform="translate(250,90)">
+            <rect x="0" y="0" width="100" height="40" rx="6" style="fill: var(--bg); stroke: var(--border-strong); stroke-width: 1.5;"/>
+            <text x="50" y="25" text-anchor="middle" font-family="inter" font-size="11" style="fill: var(--fg-soft);">2.75k µs</text>
+          </g>
+          <g transform="translate(250,140)">
+            <rect x="0" y="0" width="100" height="40" rx="6" style="fill: var(--bg); stroke: var(--border-strong); stroke-width: 1.5;"/>
+            <text x="50" y="25" text-anchor="middle" font-family="Inter" font-size="11" style="fill: var(--fg-soft);">3.0k µs</text>
+          </g>
+
+          <g transform="translate(430,40)">
+            <rect x="0" y="0" width="100" height="40" rx="6" style="fill: var(--bg); stroke: var(--danger); stroke-width: 1.5; stroke-dasharray: 3 3;" class="anim-blink"/>
+            <text x="50" y="25" text-anchor="middle" font-family="Inter" font-size="11" style="fill: var(--fg);">5.0k µs</text>
+          </g>
+          <g transform="translate(430,90)">
+            <rect x="0" y="0" width="100" height="40" rx="6" style="fill: var(--bg); stroke: var(--danger); stroke-width: 1.5; stroke-dasharray: 3 3;" class="anim-blink"/>
+            <text x="50" y="25" text-anchor="middle" font-family="Inter" font-size="11" style="fill: var(--fg);">8.0k µs</text>
+          </g>
+          <g transform="translate(430,140)">
+            <rect x="0" y="0" width="100" height="40" rx="6" style="fill: var(--bg); stroke: var(--danger); stroke-width: 1.5; stroke-dasharray: 3 3;" class="anim-blink"/>
+            <text x="50" y="25" text-anchor="middle" font-family="Inter" font-size="11" style="fill: var(--fg);">12k µs</text>
+          </g>
+
+          <!-- arrows showing promotion from structural to exploit -->
+          <path d="M 480,60 Q 480,30 120,60" style="stroke: var(--accent-fg); stroke-width: 1.5; fill: none; stroke-dasharray: 4 3;" marker-end="url(#arr)"/>
+          <text x="300" y="200" text-anchor="middle" font-family="JetBrains Mono" font-size="9" letter-spacing="2" style="fill: var(--fg-muted);">PROMOTE ON HYPOTHESIS VALIDITY, NOT RAW SCORE</text>
+        </svg>
+      </div>
+      <div class="why">
+        <strong>Why this matters</strong>
+        Single-incumbent hill climbing optimizes the immediate objective at the cost of exploration. The beam pattern is how AlphaGo-style algorithms survive low-confidence moves: keep the option alive long enough to learn whether it pays. Same idea, different scale.
+      </div>
+    </div>
+
+    <!-- 4. Where the loop breaks -->
+    <div class="walk-item">
+      <span class="step">Step 04</span>
+      <h3>Where the loop breaks</h3>
+      <p>Three failure modes show up in every long auto-research run. Knowing them in advance is half the defense.</p>
+      <p><strong>Oracle gaming.</strong> The agent finds a hole in the metric and exploits it. Sankalp calls out benchmark artifacts as the tell — any agent optimizing against a metric will find the metric's holes first. The fix is a verifier that itself runs end-to-end, not just the surface metric.</p>
+      <p><strong>Local maxima.</strong> The agent settles on a configuration that is "best" given its current framing, even though a structural change would unlock 10x more. The fix is the beam from step 3, plus periodic fresh-context resets and explicit "go read a paper" instructions.</p>
+      <p><strong>Drift collapse.</strong> Over many sessions the agent's idea space shrinks because every idea has to beat the current best. The fix is hard. Maintain a small but persistent "wild card" slot. Encourage the model to take risks and try ambitious changes. Use a stronger advisor model that produces more varied ideas. Occasionally clean up code and clear context so the agent doesn't keep mutating a frozen mental model.</p>
+      <div class="diagram">
+        <svg viewBox="0 0 600 220" role="img" aria-label="Three failure modes" xmlns="http://www.w3.org/2000/svg">
+          <!-- three small panels -->
+          <g transform="translate(30,40)">
+            <rect width="160" height="140" rx="8" style="fill: var(--bg-soft); stroke: var(--border); stroke-width: 1;"/>
+            <text x="80" y="22" text-anchor="middle" font-family="JetBrains Mono" font-size="10" letter-spacing="2" style="fill: var(--danger);">ORACLE GAMING</text>
+            <!-- arrow that loops back -->
+            <path d="M 30,90 Q 60,50 130,80" style="stroke: var(--danger); stroke-width: 2; fill: none; stroke-dasharray: 4 3;" marker-end="url(#arr)"/>
+            <circle cx="30" cy="90" r="6" style="fill: var(--danger);"/>
+            <text x="80" y="120" text-anchor="middle" font-family="Inter" font-size="11" style="fill: var(--fg-soft);">agent finds</text>
+            <text x="80" y="135" text-anchor="middle" font-family="Inter" font-size="11" style="fill: var(--fg-soft);">metric's hole</text>
+          </g>
+          <g transform="translate(220,40)">
+            <rect width="160" height="140" rx="8" style="fill: var(--bg-soft); stroke: var(--border); stroke-width: 1;"/>
+            <text x="80" y="22" text-anchor="middle" font-family="JetBrains Mono" font-size="10" letter-spacing="2" style="fill: var(--danger);">LOCAL MAX</text>
+            <!-- peak shape -->
+            <path d="M 30,110 L 60,90 L 80,70 L 100,90 L 130,110" style="stroke: var(--accent-fg); stroke-width: 2; fill: none;"/>
+            <circle cx="80" cy="70" r="5" style="fill: var(--accent);"/>
+            <text x="80" y="130" text-anchor="middle" font-family="Inter" font-size="11" style="fill: var(--fg-soft);">"best" in framing,</text>
+            <text x="80" y="145" text-anchor="middle" font-family="Inter" font-size="11" style="fill: var(--fg-soft);">10x outside it</text>
+          </g>
+          <g transform="translate(410,40)">
+            <rect width="160" height="140" rx="8" style="fill: var(--bg-soft); stroke: var(--border); stroke-width: 1;"/>
+            <text x="80" y="22" text-anchor="middle" font-family="JetBrains Mono" font-size="10" letter-spacing="2" style="fill: var(--danger);">DRIFT COLLAPSE</text>
+            <!-- narrowing band -->
+            <path d="M 30,60 L 130,100 L 30,80" style="stroke: var(--fg-muted); stroke-width: 1.5; fill: none;"/>
+            <text x="80" y="120" text-anchor="middle" font-family="Inter" font-size="11" style="fill: var(--fg-soft);">idea space</text>
+            <text x="80" y="135" text-anchor="middle" font-family="Inter" font-size="11" style="fill: var(--fg-soft);">shrinks every round</text>
+          </g>
+        </svg>
+      </div>
+      <div class="why">
+        <strong>Why this matters</strong>
+        Auto-research runs that look magical in screenshots have all survived at least one of these three. The ones that didn't end up optimizing the wrong thing, very best middle, very confidently.
+      </div>
+    </div>
+
+    <!-- 5. The human's job collapses to three things -->
+    <div class="walk-item">
+      <span class="step">Step 05</span>
+      <h3>The human's job collapses to three things</h3>
+      <p>Sankalp is honest about what he actually did for those 14 days. Not clever prompts. Three things.</p>
+      <p>Pick the objective. Build the eval loop. Know enough to recognize a real gain from a benchmarking artifact. That's it. The agent did the iteration. The human steered every two to three hours when the agent got stuck, asked it questions via <code>/btw</code> without pausing the loop, and trusted it overnight on days when the direction was set.</p>
+      <p>Reading the output is the part that looks like taste. Knowing that the agent just discovered a real 50 µs improvement versus a benchmarking artifact versus a numerical trick that won't survive larger shapes — this is what makes you the architect rather than the operator.</p>
+      <div class="diagram">
+        <svg viewBox="0 0 600 220" role="img" aria-label="Human's three jobs" xmlns="http://www.w3.org/2000/svg">
+          <!-- 3 nodes -->
+          <g transform="translate(80,40)">
+            <rect width="130" height="140" rx="10" style="fill: var(--bg); stroke: var(--accent); stroke-width: 2;"/>
+            <text x="65" y="35" text-anchor="middle" font-family="JetBrains Mono" font-size="10" letter-spacing="2" style="fill: var(--accent-fg);">01</text>
+            <text x="65" y="65" text-anchor="middle" font-family="Inter" font-size="13" font-weight="600" style="fill: var(--fg);">Pick the</text>
+            <text x="65" y="82" text-anchor="middle" font-family="Inter" font-size="13" font-weight="600" style="fill: var(--fg);">objective</text>
+            <line x1="25" y1="98" x2="105" y2="98" style="stroke: var(--border);"/>
+            <text x="65" y="118" text-anchor="middle" font-family="Inter" font-size="11" style="fill: var(--fg-muted);">what counts</text>
+            <text x="65" y="132" text-anchor="middle" font-family="Inter" font-size="11" style="fill: var(--fg-muted);">as better</text>
+          </g>
+          <g transform="translate(235,40)">
+            <rect width="130" height="140" rx="10" style="fill: var(--bg); stroke: var(--accent); stroke-width: 2;"/>
+            <text x="65" y="35" text-anchor="middle" font-family="JetBrains Mono" font-size="10" letter-spacing="2" style="fill: var(--accent-fg);">02</text>
+            <text x="65" y="65" text-anchor="middle" font-family="Inter" font-size="13" font-weight="600" style="fill: var(--fg);">Build the</text>
+            <text x="65" y="82" text-anchor="middle" font-family="Inter" font-size="13" font-weight="600" style="fill: var(--fg);">eval loop</text>
+            <line x1="25" y1="98" x2="105" y2="98" style="stroke: var(--border);"/>
+            <text x="65" y="118" text-anchor="middle" font-family="Inter" font-size="11" style="fill: var(--fg-muted);">oracle, log,</text>
+            <text x="65" y="132" text-anchor="middle" font-family="Inter" font-size="11" style="fill: var(--fg-muted);">discipline</text>
+          </g>
+          <g transform="translate(390,40)">
+            <rect width="130" height="140" rx="10" style="fill: var(--bg); stroke: var(--accent); stroke-width: 2;" class="anim-pulse"/>
+            <text x="65" y="35" text-anchor="middle" font-family="JetBrains Mono" font-size="10" letter-spacing="2" style="fill: var(--accent-fg);">03</text>
+            <text x="65" y="65" text-anchor="middle" font-family="Inter" font-size="13" font-weight="600" style="fill: var(--fg);">Read the</text>
+            <text x="65" y="82" text-anchor="middle" font-family="Inter" font-size="13" font-weight="600" style="fill: var(--fg);">output</text>
+            <line x1="25" y1="98" x2="105" y2="98" style="stroke: var(--border);"/>
+            <text x="65" y="118" text-anchor="middle" font-family="Inter" font-size="11" style="fill: var(--fg-muted);">real gain vs</text>
+            <text x="65" y="132" text-anchor="middle" font-family="Inter" font-size="11" style="fill: var(--fg-muted);">artifact</text>
+          </g>
+          <!-- connecting arrows -->
+          <path d="M 210,110 L 235,110" style="stroke: var(--accent-fg); stroke-width: 2; fill: none;" marker-end="url(#arr)"/>
+          <path d="M 365,110 L 390,110" style="stroke: var(--accent-fg); stroke-width: 2; fill: none;" marker-end="url(#arr)"/>
+        </svg>
+      </div>
+      <div class="why">
+        <strong>Why this matters</strong>
+        Three jobs, not twenty. The architect's job in an auto-research system is to be the verifier of the verifier, not to be the agent. If you can't read the output well enough to spot a benchmarking artifact, the loop will run forever and you won't know.
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<!-- COMMON CONFUSIONS -->
+<section class="block">
+  <span class="section-label">Common confusions</span>
+  <h2>Four things people get wrong about this.</h2>
+  <div class="confusions">
+    <div class="confusion">
+      <div class="q"><span class="marker">×</span><span>Isn't this just RL with extra steps?</span></div>
+      <div class="a">No. RL updates model weights using gradient signal from a reward. <strong>Auto-research updates source code</strong> using edit-rule signal from a score. The "policy" being optimized is text in a file, not weights in a tensor. Different optimization surface, different bottlenecks.</div>
+    </div>
+    <div class="confusion">
+      <div class="q"><span class="marker">×</span><span>The model must be the smartest one.</span></div>
+      <div class="a">It helps but it isn't the load-bearing variable. Sankalp's GPT-5.5 Codex outperformed a "principal engineer at NVIDIA" not because it was smarter on a per-call basis, but because it could <strong>iterate 1,500 times in 14 days</strong>. The volume of cheap attempts matters more than the depth of any single one.</div>
+    </div>
+    <div class="confusion">
+      <div class="q"><span class="marker">×</span><span>Auto-research replaces the researcher.</span></div>
+      <div class="a">It replaces the <em>iteration</em>. The human still owns the objective, the eval loop, and the artifact-vs-real-gain read. This is why "domain expertise accelerates harness design and human-in-the-loop steering" — you need to know enough about the problem to write <code>program.md</code> that points at the right thing.</div>
+    </div>
+    <div class="confusion">
+      <div class="q"><span class="marker">×</span><span>Submit fast, submit always.</span></div>
+      <div class="a">Auto-research explicitly says no. AGENTS.md for the kernel run included "Space leaderboard submissions out. Do not stack rapid back-to-back submissions." "Treat a timeout as inconclusive, not as a correctness/performance rejection." Without that discipline the loop generates noise faster than it generates signal.</div>
+      <svg viewBox="0 0 280 90" xmlns="http://www.w3.org/2000/svg" style="width:100%; height:auto; margin-top:12px;" role="img" aria-label="Submission cadence comparison">
+          <text x="10" y="20" font-family="JetBrains Mono" font-size="10" letter-spacing="2" style="fill: var(--fg-muted);">CHAOTIC (REJECTED)</text>
+          <g>
+            <rect x="10" y="30" width="2" height="14" style="fill: var(--danger);"/>
+            <rect x="18" y="30" width="2" height="14" style="fill: var(--danger);"/>
+            <rect x="26" y="30" width="2" height="14" style="fill: var(--danger);"/>
+            <rect x="34" y="30" width="2" height="14" style="fill: var(--danger);"/>
+            <rect x="42" y="30" width="2" height="14" style="fill: var(--danger);"/>
+            <rect x="50" y="30" width="2" height="14" style="fill: var(--danger);"/>
+            <rect x="58" y="30" width="2" height="14" style="fill: var(--danger);"/>
+            <rect x="66" y="30" width="2" height="14" style="fill: var(--danger);"/>
+            <rect x="74" y="30" width="2" height="14" style="fill: var(--danger);"/>
+            <rect x="82" y="30" width="2" height="14" style="fill: var(--danger);"/>
+            <rect x="90" y="30" width="2" height="14" style="fill: var(--danger);"/>
+            <rect x="98" y="30" width="2" height="14" style="fill: var(--danger);"/>
+            <rect x="106" y="30" width="2" height="14" style="fill: var(--danger);"/>
+            <rect x="114" y="30" width="2" height="14" style="fill: var(--danger);"/>
+            <rect x="122" y="30" width="2" height="14" style="fill: var(--danger);"/>
+            <rect x="130" y="30" width="2" height="14" style="fill: var(--danger);"/>
+            <rect x="138" y="30" width="2" height="14" style="fill: var(--danger);"/>
+            <rect x="146" y="30" width="2" height="14" style="fill: var(--danger);"/>
+            <rect x="154" y="30" width="2" height="14" style="fill: var(--danger);"/>
+            <rect x="162" y="30" width="2" height="14" style="fill: var(--danger);"/>
+            <rect x="170" y="30" width="2" height="14" style="fill: var(--danger);"/>
+            <rect x="178" y="30" width="2" height="14" style="fill: var(--danger);"/>
+            <rect x="186" y="30" width="2" height="14" style="fill: var(--danger);"/>
+            <rect x="194" y="30" width="2" height="14" style="fill: var(--danger);"/>
+            <rect x="202" y="30" width="2" height="14" style="fill: var(--danger);"/>
+            <rect x="210" y="30" width="2" height="14" style="fill: var(--danger);"/>
+            <rect x="218" y="30" width="2" height="14" style="fill: var(--danger);"/>
+            <rect x="226" y="30" width="2" height="14" style="fill: var(--danger);"/>
+            <rect x="234" y="30" width="2" height="14" style="fill: var(--danger);"/>
+            <rect x="242" y="30" width="2" height="14" style="fill: var(--danger);"/>
+            <rect x="250" y="30" width="2" height="14" style="fill: var(--danger);"/>
+            <rect x="258" y="30" width="2" height="14" style="fill: var(--danger);"/>
+          </g>
+          <text x="150" y="70" text-anchor="middle" font-family="JetBrains Mono" font-size="9" letter-spacing="2" style="fill: var(--danger);">queues · timeouts · noise</text>
+          <text x="150" y="82" text-anchor="middle" font-family="JetBrains Mono" font-size="9" letter-spacing="2" style="fill: var(--danger);">queues · timeouts · noise</text>
+          <animateTransform attributeName="transform" type="translate" values="0,0;1,0;0,0" dur="0.8s" repeatCount="indefinite"/>
+        </svg>
+        <svg viewBox="0 0 280 90" xmlns="http://www.w3.org/2000/svg" style="width:100%; height:auto; margin-top:8px;" role="img" aria-label="Disciplined submission cadence">
+          <text x="10" y="20" font-family="JetBrains Mono" font-size="10" letter-spacing="2" style="fill: var(--accent-fg);">DISCIPLINED (RECOMMENDED)</text>
+          <g>
+            <rect x="10" y="30" width="4" height="14" style="fill: var(--accent);"/>
+            <rect x="60" y="30" width="4" height="14" style="fill: var(--accent);"/>
+            <rect x="110" y="30" width="4" height="14" style="fill: var(--accent);"/>
+            <rect x="160" y="30" width="4" height="14" style="fill: var(--accent);"/>
+            <rect x="210" y="30" width="4" height="14" style="fill: var(--accent);"/>
+            <rect x="260" y="30" width="4" height="14" style="fill: var(--accent);"/>
+            <circle cx="10" cy="30" r="4" style="fill: var(--accent);">
+              <animate attributeName="r" values="3;5;3" dur="2s" repeatCount="indefinite"/>
+            </circle>
+            <circle cx="60" cy="30" r="4" style="fill: var(--accent);">
+              <animate attributeName="r" values="3;5;3" dur="2s" begin="0.3s" repeatCount="indefinite"/>
+            </circle>
+            <circle cx="110" cy="30" r="4" style="fill: var(--accent);">
+              <animate attributeName="r" values="3;5;3" dur="2s" begin="0.6s" repeatCount="indefinite"/>
+            </circle>
+            <circle cx="160" cy="30" r="4" style="fill: var(--accent);">
+              <animate attributeName="r" values="3;5;3" dur="2s" begin="0.9s" repeatCount="indefinite"/>
+            </circle>
+            <circle cx="210" cy="30" r="4" style="fill: var(--accent);">
+              <animate attributeName="r" values="3;5;3" dur="2s" begin="1.2s" repeatCount="indefinite"/>
+            </circle>
+            <circle cx="260" cy="30" r="4" style="fill: var(--accent);">
+              <animate attributeName="r" values="3;5;3" dur="2s" begin="1.5s" repeatCount="indefinite"/>
+            </circle>
+          </g>
+          <text x="135" y="70" text-anchor="middle" font-family="JetBrains Mono" font-size="9" letter-spacing="2" style="fill: var(--accent-fg);">evidence per submission ·</text>
+          <text x="135" y="82" text-anchor="middle" font-family="JetBrains Mono" font-size="9" letter-spacing="2" style="fill: var(--accent-fg);">time to read · reason</text>
+        </svg>
+    </div>
+  </div>
+</section>
+
+<!-- WHERE TO GO NEXT -->
+<section class="block">
+  <span class="section-label">Where to go next</span>
+  <h2>Three followups that earn the click.</h2>
+  <div class="nextups">
+    <a class="nextup" href="https://sankalp.bearblog.dev/autoresearch/" target="_blank" rel="noopener">
+      <span class="label">Source postmortem</span>
+      <h4>Sankalp's "Auto-research with codex"</h4>
+      <div class="desc">The original 14-day postmortem. Includes the AGENTS.md spec, the breakthrough ideas table, what he would do differently, and full references.</div>
+    </a>
+    <a class="nextup" href="https://github.com/karpathy/autoresearch" target="_blank" rel="noopener">
+      <span class="label">Reference implementation</span>
+      <h4>Karpathy's autoresearch repo</h4>
+      <div class="desc">Three-file minimal harness: prepare.py (fixed ground truth), train.py (agent edits), program.md (human edits). The cleanest starting point if you want to run one yourself.</div>
+    </a>
+    <a class="nextup" href="https://ml-mike.com/writing/qr_v2/" target="_blank" rel="noopener">
+      <span class="label">Visuals for the math</span>
+      <h4>Mike's QR writeup (5th place)</h4>
+      <div class="desc">The clearest explainer of the QR kernel itself. If you want to understand the actual problem the loop was iterating on, this is the visual companion to Sankalp's text.</div>
+    </a>
+  </div>
+</section>
+
+<footer>
+  Day 15 of the explainer series. Built by Hermes using the explainer-builder skill.
+</footer>
+
+<script>
+  // Theme toggle
+  const root = document.documentElement;
+  const btn = document.getElementById('theme-toggle');
+  const lbl = document.getElementById('theme-label');
+  function sync() {
+    const t = root.getAttribute('data-theme');
+    lbl.textContent = t === 'dark' ? 'Light' : 'Dark';
+  }
+  sync();
+  btn.addEventListener('click', () => {
+    const cur = root.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
+    const next = cur === 'dark' ? 'light' : 'dark';
+    root.setAttribute('data-theme', next);
+    try { localStorage.setItem('theme', next); } catch (e) {}
+    sync();
+  });
+</script>
+</body>
+</html>
