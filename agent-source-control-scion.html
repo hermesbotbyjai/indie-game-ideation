@@ -1,0 +1,1191 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Source Control for Agents: What Scion Teaches About Repo-Scale</title>
+<meta name="description" content="An explainer on Anthropic's Scion: why a monorepo with 30,000 merges a day can't run on git, and what changes when source control becomes a service." />
+<script>
+  // Pre-stylesheet dark mode to avoid flash
+  (function(){
+    try {
+      var t = localStorage.getItem('theme');
+      if (t === 'dark') document.documentElement.setAttribute('data-theme','dark');
+      else if (t === 'light') document.documentElement.setAttribute('data-theme','light');
+      else if (window.matchMedia('(prefers-color-scheme: dark)').matches)
+        document.documentElement.setAttribute('data-theme','dark');
+    } catch(e) {}
+  })();
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #ffffff;
+    --bg-elev: #fafafa;
+    --text: #0d0d0d;
+    --text-muted: #555a63;
+    --text-faint: #8a8f99;
+    --border: rgba(13,13,13,0.08);
+    --border-strong: rgba(13,13,13,0.16);
+    --accent: #18E299;
+    --accent-hover: #12c481;
+    --accent-soft: rgba(24,226,153,0.10);
+    --code-bg: #f4f4f6;
+    --surface-soft: rgba(13,13,13,0.03);
+    --shadow-lg: 0 24px 60px -20px rgba(13,13,13,0.18);
+    --gradient-hero: radial-gradient(1200px 600px at 50% -20%, rgba(24,226,153,0.10), transparent 60%);
+    --label: "GEIST MONO";
+    --mono: 'Geist Mono', 'JetBrains Mono', ui-monospace, monospace;
+    --sans: 'Inter', system-ui, -apple-system, sans-serif;
+  }
+  [data-theme="dark"] {
+    --bg: #0a0a0a;
+    --bg-elev: #111113;
+    --text: #f2f2f3;
+    --text-muted: #a4a8b2;
+    --text-faint: #6b6f78;
+    --border: rgba(255,255,255,0.08);
+    --border-strong: rgba(255,255,255,0.18);
+    --accent: #2af5a8;
+    --accent-hover: #4ff7bb;
+    --accent-soft: rgba(42,245,168,0.12);
+    --code-bg: #15151a;
+    --surface-soft: rgba(255,255,255,0.04);
+    --shadow-lg: 0 24px 60px -20px rgba(0,0,0,0.5);
+    --gradient-hero: radial-gradient(1200px 600px at 50% -20%, rgba(42,245,168,0.16), transparent 60%);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0a0a0a;
+      --bg-elev: #111113;
+      --text: #f2f2f3;
+      --text-muted: #a4a8b2;
+      --text-faint: #6b6f78;
+      --border: rgba(255,255,255,0.08);
+      --border-strong: rgba(255,255,255,0.18);
+      --accent: #2af5a8;
+      --accent-hover: #4ff7bb;
+      --accent-soft: rgba(42,245,168,0.12);
+      --code-bg: #15151a;
+      --surface-soft: rgba(255,255,255,0.04);
+      --shadow-lg: 0 24px 60px -20px rgba(0,0,0,0.5);
+      --gradient-hero: radial-gradient(1200px 600px at 50% -20%, rgba(42,245,168,0.16), transparent 60%);
+    }
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 17px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  .nav {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    backdrop-filter: blur(20px);
+    background: color-mix(in srgb, var(--bg) 80%, transparent);
+    border-bottom: 1px solid var(--border);
+    padding: 14px 24px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .nav-logo {
+    font-family: var(--mono);
+    font-weight: 600;
+    font-size: 13px;
+    letter-spacing: -0.01em;
+    color: var(--text);
+    text-decoration: none;
+  }
+  .nav-logo span { color: var(--accent); }
+  .nav-actions { display: flex; gap: 8px; align-items: center; }
+  .nav-link {
+    font-family: var(--mono);
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+    text-decoration: none;
+    padding: 6px 12px;
+    border-radius: 9999px;
+    transition: background 0.15s, color 0.15s;
+  }
+  .nav-link:hover { background: var(--surface-soft); color: var(--text); }
+  .theme-toggle {
+    width: 32px; height: 32px;
+    border-radius: 9999px;
+    border: 1px solid var(--border);
+    background: transparent;
+    cursor: pointer;
+    display: grid; place-items: center;
+    color: var(--text-muted);
+    transition: background 0.15s, border-color 0.15s;
+  }
+  .theme-toggle:hover { background: var(--surface-soft); border-color: var(--border-strong); }
+  .theme-toggle svg { width: 14px; height: 14px; }
+
+  main { padding-bottom: 120px; }
+
+  /* HERO */
+  .hero {
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 80px 24px 60px;
+    text-align: center;
+    background: var(--gradient-hero);
+  }
+  .label {
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 28px;
+    display: inline-block;
+    padding: 6px 14px;
+    border: 1px solid var(--accent-soft);
+    border-radius: 9999px;
+    background: var(--accent-soft);
+  }
+  h1 {
+    font-size: 64px;
+    font-weight: 800;
+    line-height: 1.05;
+    letter-spacing: -0.035em;
+    margin: 0 0 24px;
+    color: var(--text);
+  }
+  .tagline {
+    font-size: 21px;
+    line-height: 1.45;
+    color: var(--text-muted);
+    max-width: 640px;
+    margin: 0 auto 48px;
+  }
+  .micro-list {
+    max-width: 560px;
+    margin: 0 auto;
+    text-align: left;
+    display: grid;
+    gap: 14px;
+  }
+  .micro-item {
+    display: flex;
+    gap: 14px;
+    align-items: flex-start;
+    font-size: 15px;
+    color: var(--text-muted);
+  }
+  .micro-item svg { flex-shrink: 0; margin-top: 5px; }
+
+  /* Section primitives */
+  section { padding: 80px 24px; }
+  section.tight { padding: 60px 24px; }
+  .container { max-width: 760px; margin: 0 auto; }
+  .container-wide { max-width: 980px; margin: 0 auto; }
+  .container-narrow { max-width: 620px; margin: 0 auto; }
+
+  h2 {
+    font-size: 38px;
+    font-weight: 800;
+    line-height: 1.1;
+    letter-spacing: -0.025em;
+    margin: 0 0 8px;
+    color: var(--text);
+  }
+  h2 .num {
+    font-family: var(--mono);
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--accent);
+    display: block;
+    margin-bottom: 16px;
+    letter-spacing: 0.08em;
+  }
+  .section-head {
+    max-width: 760px;
+    margin: 0 auto 48px;
+    text-align: center;
+  }
+  .section-head p {
+    font-size: 16px;
+    color: var(--text-muted);
+    margin: 12px auto 0;
+    max-width: 540px;
+  }
+
+  /* ONE-SENTENCE MODEL */
+  .model-card {
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 36px 40px;
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    position: relative;
+    box-shadow: var(--shadow-lg);
+  }
+  .model-card::before {
+    content: '';
+    position: absolute;
+    left: 0; top: 24px; bottom: 24px;
+    width: 3px;
+    background: var(--accent);
+    border-radius: 0 3px 3px 0;
+  }
+  .model-label {
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 18px;
+  }
+  .model-text {
+    font-size: 22px;
+    line-height: 1.45;
+    font-weight: 500;
+    color: var(--text);
+    margin: 0;
+    letter-spacing: -0.01em;
+  }
+  .model-text em {
+    color: var(--accent);
+    font-style: normal;
+    font-weight: 600;
+  }
+
+  /* HERO DIAGRAM */
+  .hero-diagram {
+    margin-top: 24px;
+    padding: 0;
+    border-radius: 18px;
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    overflow: hidden;
+  }
+  .hero-diagram .canvas { padding: 32px; }
+  .hero-diagram .caption {
+    padding: 14px 24px;
+    border-top: 1px solid var(--border);
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-faint);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+
+  /* Walkthrough */
+  .walk-section {
+    padding: 60px 0 20px;
+    border-top: 1px solid var(--border);
+  }
+  .walk-section:first-of-type { border-top: none; padding-top: 0; }
+
+  .walk-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 56px;
+    align-items: start;
+  }
+  @media (max-width: 820px) {
+    .walk-grid { grid-template-columns: 1fr; gap: 32px; }
+  }
+
+  .walk-copy h3 {
+    font-size: 26px;
+    font-weight: 700;
+    letter-spacing: -0.015em;
+    margin: 0 0 16px;
+    line-height: 1.2;
+  }
+  .walk-copy p {
+    color: var(--text-muted);
+    margin: 0 0 18px;
+    font-size: 16.5px;
+  }
+  .walk-copy p code, code {
+    font-family: var(--mono);
+    font-size: 0.88em;
+    background: var(--code-bg);
+    padding: 2px 6px;
+    border-radius: 5px;
+    color: var(--text);
+  }
+
+  .why-box {
+    margin-top: 24px;
+    padding: 16px 18px;
+    background: var(--accent-soft);
+    border: 1px solid var(--accent-soft);
+    border-left: 3px solid var(--accent);
+    border-radius: 8px;
+    font-size: 14.5px;
+    color: var(--text);
+    line-height: 1.5;
+  }
+  .why-box .lbl {
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--accent);
+    display: block;
+    margin-bottom: 6px;
+  }
+
+  .diagram-card {
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 24px;
+    overflow: hidden;
+  }
+  .diagram-card .lbl {
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    margin-bottom: 14px;
+  }
+  .diagram-card svg { width: 100%; height: auto; display: block; }
+
+  /* COMMON CONFUSIONS */
+  .confusions {
+    display: grid;
+    gap: 16px;
+  }
+  .conf-card {
+    padding: 24px 28px;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    background: var(--bg-elev);
+  }
+  .conf-card .num {
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    color: var(--text-faint);
+    text-transform: uppercase;
+    margin-bottom: 12px;
+    display: block;
+  }
+  .conf-card .wrong {
+    font-size: 16px;
+    color: var(--text-muted);
+    margin: 0 0 12px;
+    line-height: 1.5;
+  }
+  .conf-card .wrong::before {
+    content: 'common take: ';
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-faint);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+  .conf-card .right {
+    font-size: 17px;
+    color: var(--text);
+    margin: 0;
+    line-height: 1.55;
+    font-weight: 500;
+  }
+  .conf-card .right::before {
+    content: 'actual answer: ';
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--accent);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+
+  /* WHERE NEXT */
+  .next-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 14px; }
+  .next-list li a {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 18px 22px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--bg-elev);
+    text-decoration: none;
+    color: var(--text);
+    transition: border-color 0.15s, transform 0.15s;
+  }
+  .next-list li a:hover {
+    border-color: var(--accent);
+    transform: translateY(-1px);
+  }
+  .next-list .title { font-weight: 600; font-size: 16px; }
+  .next-list .meta {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-faint);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-top: 3px;
+    display: block;
+  }
+  .next-list .arrow { font-family: var(--mono); color: var(--accent); font-size: 18px; }
+
+  /* Numbers row */
+  .numbers {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 0;
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    overflow: hidden;
+    background: var(--bg-elev);
+    margin: 48px 0 0;
+  }
+  @media (max-width: 720px) { .numbers { grid-template-columns: repeat(2, 1fr); } }
+  .stat {
+    padding: 28px 24px;
+    text-align: left;
+    border-right: 1px solid var(--border);
+  }
+  .stat:last-child { border-right: none; }
+  .stat .v {
+    font-family: var(--mono);
+    font-size: 28px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    color: var(--accent);
+  }
+  .stat .k {
+    font-size: 13px;
+    color: var(--text-muted);
+    margin-top: 4px;
+    display: block;
+  }
+
+  footer {
+    border-top: 1px solid var(--border);
+    padding: 32px 24px;
+    text-align: center;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--text-faint);
+    letter-spacing: 0.02em;
+  }
+
+  /* Animations */
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.45; }
+  }
+  @keyframes drift {
+    0% { transform: translateY(0); }
+    100% { transform: translateY(-6px); }
+  }
+  @keyframes drawIn {
+    from { stroke-dashoffset: 600; }
+    to { stroke-dashoffset: 0; }
+  }
+  @keyframes flood {
+    0% { opacity: 0; transform: translateY(8px); }
+    100% { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+  }
+  @keyframes shimmer {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(100%); }
+  }
+  @keyframes expandBar {
+    from { width: 0; }
+    to { width: var(--w, 100%); }
+  }
+  @keyframes countUp {
+    from { opacity: 0; transform: translateY(4px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+  @keyframes wave {
+    0% { transform: translateX(0); }
+    100% { transform: translateX(-20px); }
+  }
+  @keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+  @keyframes glow {
+    0%, 100% { filter: drop-shadow(0 0 0 transparent); }
+    50% { filter: drop-shadow(0 0 8px var(--accent-soft)); }
+  }
+  @keyframes slabIn {
+    from { transform: translateX(-8px); opacity: 0; }
+    to { transform: translateX(0); opacity: 1; }
+  }
+  @keyframes flyAlong {
+    0% { offset-distance: 0%; opacity: 0; }
+    10% { opacity: 1; }
+    90% { opacity: 1; }
+    100% { offset-distance: 100%; opacity: 0; }
+  }
+  @keyframes barGrow {
+    from { transform: scaleY(0); }
+    to { transform: scaleY(1); }
+  }
+
+  .pulse-dot { animation: pulse 2s ease-in-out infinite; }
+  .drift { animation: drift 3s ease-in-out infinite alternate; }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.001ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.001ms !important;
+    }
+  }
+</style>
+</head>
+<body>
+
+<nav class="nav" aria-label="Primary">
+  <a href="#" class="nav-logo">hermes<span>.</span>explainer</a>
+  <div class="nav-actions">
+    <a href="#model" class="nav-link">Model</a>
+    <a href="#walk" class="nav-link">Walkthrough</a>
+    <a href="#conf" class="nav-link">Confusions</a>
+    <button class="theme-toggle" id="themeBtn" aria-label="Toggle theme">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" id="themeIcon">
+        <circle cx="12" cy="12" r="4"/>
+        <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/>
+      </svg>
+    </button>
+  </div>
+</nav>
+
+<main>
+
+  <!-- HERO -->
+  <header class="hero">
+    <span class="label">Day 17 / Source Control / Agent-Native</span>
+    <h1>Source control<br/>for agents</h1>
+    <p class="tagline">When coding is the cheap part, git stops being the right graph. What Anthropic's <code>Scion</code> teaches us about designing a repo that 30,000 merges per day don't break.</p>
+    <div class="micro-list container-narrow">
+      <div class="micro-item">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2.5" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>
+        <span>Why a 100 GB main history is no longer an edge case: agent-native teams ship at orders of magnitude past what git was designed for.</span>
+      </div>
+      <div class="micro-item">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2.5" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>
+        <span>The five principles Scion commits to that git doesn't: online clients, asymmetric roles, full programmatic surface, lock-free commits, sparse-by-default checkouts.</span>
+      </div>
+      <div class="micro-item">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2.5" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>
+        <span>What a "changeset" really is when the unit of work becomes a write-ahead-log entry instead of a snapshot.</span>
+      </div>
+      <div class="micro-item">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2.5" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>
+        <span>What staff engineers should steal for other agent-scale systems, not just SCM.</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- ONE-SENTENCE MODEL -->
+  <section id="model" class="tight">
+    <div class="model-card">
+      <div class="model-label">The model in one sentence</div>
+      <p class="model-text">Source control stops being a graph of files to clone and becomes a <em>queryable, always-online service</em> that scales with the size of the change, not the size of the repo, because at agent scale the client is never offline and almost never needs a full working copy.</p>
+    </div>
+
+    <div class="hero-diagram container-wide" style="margin-top:56px; margin-left:auto; margin-right:auto;">
+      <div class="canvas">
+        <svg viewBox="0 0 720 360" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Git client-server model vs Scion service model">
+          <defs>
+            <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 z" style="fill:var(--text-faint)"/>
+            </marker>
+            <marker id="arrG" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 z" style="fill:var(--accent)"/>
+            </marker>
+          </defs>
+
+          <!-- left side: git -->
+          <g transform="translate(20,40)">
+            <text x="0" y="0" style="fill:var(--text-faint); font-family:var(--mono); font-size:11px; font-weight:600; letter-spacing:0.1em;">GIT MODEL</text>
+            <text x="0" y="20" style="fill:var(--text-muted); font-size:13px;">every clone = full repo</text>
+
+            <!-- 4 git client cubes -->
+            <g style="fill:var(--surface-soft); stroke:var(--border-strong); stroke-width:1.5;">
+              <rect x="0" y="50" width="86" height="60" rx="8"/>
+              <rect x="100" y="50" width="86" height="60" rx="8"/>
+              <rect x="0" y="135" width="86" height="60" rx="8"/>
+              <rect x="100" y="135" width="86" height="60" rx="8"/>
+            </g>
+            <g style="fill:var(--text); font-family:var(--mono); font-size:10px;">
+              <text x="43" y="78" text-anchor="middle">Developer</text>
+              <text x="43" y="92" text-anchor="middle" style="fill:var(--text-faint)">100 GB copy</text>
+              <text x="143" y="78" text-anchor="middle">CI job</text>
+              <text x="143" y="92" text-anchor="middle" style="fill:var(--text-faint)">100 GB copy</text>
+              <text x="43" y="163" text-anchor="middle">Agent</text>
+              <text x="43" y="177" text-anchor="middle" style="fill:var(--text-faint)">100 GB copy</text>
+              <text x="143" y="163" text-anchor="middle">Job</text>
+              <text x="143" y="177" text-anchor="middle" style="fill:var(--text-faint)">100 GB copy</text>
+            </g>
+            <!-- arrow pull down -->
+            <line x1="93" y1="80" x2="280" y2="80" style="stroke:var(--text-faint); stroke-width:1.5; stroke-dasharray:4 4" marker-end="url(#arr)">
+            <animate attributeName="stroke-dashoffset" values="16;0" dur="1.4s" repeatCount="indefinite"/>
+            </line>
+            <text x="186" y="75" text-anchor="middle" style="fill:var(--text-faint); font-family:var(--mono); font-size:10px;">fetch 100 GB</text>
+
+            <!-- central git server -->
+            <g transform="translate(280,55)">
+              <rect x="0" y="0" width="120" height="120" rx="10" style="fill:var(--surface-soft); stroke:var(--text-faint); stroke-width:1.5;"/>
+              <text x="60" y="50" text-anchor="middle" style="fill:var(--text); font-family:var(--mono); font-size:12px; font-weight:600;">Git server</text>
+              <text x="60" y="68" text-anchor="middle" style="fill:var(--text-muted); font-size:11px;">authoritative</text>
+              <text x="60" y="86" text-anchor="middle" style="fill:var(--text-muted); font-size:11px;">copy + lots</text>
+              <text x="60" y="104" text-anchor="middle" style="fill:var(--text-muted); font-size:11px;">of mirrors</text>
+            </g>
+          </g>
+
+          <!-- divider -->
+          <line x1="420" y1="20" x2="420" y2="340" style="stroke:var(--border); stroke-width:1; stroke-dasharray:2 4"/>
+
+          <!-- right side: Scion -->
+          <g transform="translate(450,40)">
+            <text x="0" y="0" style="fill:var(--accent); font-family:var(--mono); font-size:11px; font-weight:600; letter-spacing:0.1em;">SCION MODEL</text>
+            <text x="0" y="20" style="fill:var(--text-muted); font-size:13px;">clients ask, they never clone</text>
+
+            <!-- thin clients -->
+            <g style="fill:var(--bg-elev); stroke:var(--accent); stroke-width:1.5;">
+              <rect x="0" y="50" width="100" height="32" rx="6"/>
+              <rect x="0" y="92" width="100" height="32" rx="6"/>
+              <rect x="0" y="134" width="100" height="32" rx="6"/>
+              <rect x="0" y="176" width="100" height="32" rx="6"/>
+            </g>
+            <g style="fill:var(--text); font-family:var(--mono); font-size:10px;">
+              <text x="50" y="69" text-anchor="middle">Developer + daemon</text>
+              <text x="50" y="111" text-anchor="middle">CI job</text>
+              <text x="50" y="153" text-anchor="middle">Agent sandbox</text>
+              <text x="50" y="195" text-anchor="middle">Research job</text>
+            </g>
+
+            <!-- arrow label, only what they ask for -->
+            <line x1="105" y1="66" x2="195" y2="118" style="stroke:var(--accent); stroke-width:1.5" marker-end="url(#arrG)" class="pulse-dot">
+              <animate attributeName="stroke-dasharray" values="3 4;6 2;3 4" dur="2.4s" repeatCount="indefinite"/>
+            </line>
+            <text x="142" y="86" style="fill:var(--accent); font-family:var(--mono); font-size:10px;">only what I need</text>
+            <line x1="105" y1="108" x2="195" y2="118" style="stroke:var(--accent); stroke-width:1.5" marker-end="url(#arrG)"/>
+            <line x1="105" y1="150" x2="195" y2="118" style="stroke:var(--accent); stroke-width:1.5" marker-end="url(#arrG)"/>
+            <line x1="105" y1="192" x2="195" y2="118" style="stroke:var(--accent); stroke-width:1.5" marker-end="url(#arrG)"/>
+
+            <!-- service with tiers -->
+            <g transform="translate(200,90)">
+              <rect x="0" y="0" width="80" height="56" rx="6" style="fill:var(--accent-soft); stroke:var(--accent); stroke-width:1.5"/>
+              <text x="40" y="22" text-anchor="middle" style="fill:var(--accent); font-family:var(--mono); font-size:10px; font-weight:600;">scion-</text>
+              <text x="40" y="36" text-anchor="middle" style="fill:var(--accent); font-family:var(--mono); font-size:10px; font-weight:600;">cache</text>
+              <text x="40" y="50" text-anchor="middle" style="fill:var(--text); font-family:var(--mono); font-size:9px;">in-memory</text>
+            </g>
+            <line x1="280" y1="118" x2="252" y2="220" style="stroke:var(--border-strong); stroke-width:1" marker-end="url(#arr)"/>
+            <g transform="translate(170,210)">
+              <rect x="0" y="0" width="92" height="56" rx="6" style="fill:var(--surface-soft); stroke:var(--border-strong); stroke-width:1.5"/>
+              <text x="46" y="22" text-anchor="middle" style="fill:var(--text); font-family:var(--mono); font-size:10px; font-weight:600;">scion-servers</text>
+              <text x="46" y="36" text-anchor="middle" style="fill:var(--text-muted); font-size:10px;">horizontally</text>
+              <text x="46" y="48" text-anchor="middle" style="fill:var(--text-muted); font-size:10px;">scalable</text>
+            </g>
+
+            <!-- spanner underneath -->
+            <rect x="0" y="218" width="140" height="20" rx="4" style="fill:var(--surface-soft); stroke:var(--border); stroke-dasharray:3 3">
+            <animate attributeName="x" values="0;-3;0" dur="6s" repeatCount="indefinite"/>
+            </rect>
+            <text x="70" y="232" text-anchor="middle" style="fill:var(--text-faint); font-family:var(--mono); font-size:10px;">Spanner + blob storage</text>
+
+            <text x="-10" y="284" style="fill:var(--text-faint); font-family:var(--mono); font-size:10px; letter-spacing:0.08em;">no full materialized copy anywhere</text>
+          </g>
+
+          <line x1="0" y1="350" x2="720" y2="350" style="stroke:var(--border); stroke-width:1"/>
+        </svg>
+      </div>
+      <div class="caption">Conceptual shift: git hands every client the whole graph; Scion answers only the questions clients ask, with tiered caches and no materialized copy anywhere on the server side either.</div>
+    </div>
+  </section>
+
+  <!-- NUMBERS -->
+  <section class="tight" style="padding-top:0;">
+    <div class="numbers container-wide">
+      <div class="stat">
+        <div class="v" style="display:flex; align-items:baseline; gap:6px;">
+          <span>2,500</span>
+          <svg width="14" height="10" viewBox="0 0 24 16" fill="none" stroke="var(--accent)" stroke-width="2"><polyline points="2 14 12 4 22 14"/></svg>
+        </div>
+        <div class="k">merges / day, May 2026</div>
+      </div>
+      <div class="stat">
+        <div class="v">30,000+</div>
+        <div class="k">merges / day, September 2026</div>
+      </div>
+      <div class="stat">
+        <div class="v">100 GB</div>
+        <div class="k">main branch history alone</div>
+      </div>
+      <div class="stat">
+        <div class="v">25 M</div>
+        <div class="k">code checkouts / day for CI</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- WALKTHROUGH -->
+  <section id="walk">
+    <div class="section-head">
+      <div class="label" style="margin-bottom:14px;">Walkthrough</div>
+      <h2>Five principles,<br/>one walking contradiction.</h2>
+      <p>The whole Scion design is an unfolding of a single observation. Each principle is what you do once you actually accept the prior one.</p>
+    </div>
+
+    <div class="container-wide">
+
+      <!-- 1. Online clients -->
+      <div class="walk-section">
+        <div class="walk-grid">
+          <div class="walk-copy">
+            <h3>1. Clients are always online, and that changes everything.</h3>
+            <p>Git's deepest assumption is that you might be on a plane. That's why you carry the whole repo, why <code>git log</code> works offline, why <code>blame</code> is a local operation. Scion just deletes the assumption.</p>
+            <p>The Anthropic team noticed that they were running git as if it were centralized, but every real client was an agent or a CI job that is online by definition. The properties that make git good for distributed developers were the ones actively breaking them at scale.</p>
+            <div class="why-box">
+              <span class="lbl">why this matters</span>
+              If your clients are online, the local object cache can be small and the server can be the source of truth. Don't run a distributed algorithm when no one is distributed.
+            </div>
+          </div>
+          <div>
+            <div class="diagram-card">
+              <div class="lbl">fig 1 / online assumption</div>
+              <svg viewBox="0 0 360 240" xmlns="http://www.w3.org/2000/svg">
+                <g style="font-family:var(--mono); font-size:10px; fill:var(--text-muted)">
+                  <text x="0" y="14">GIT: offline-first</text>
+                  <text x="0" y="32">SCION: online-first</text>
+                </g>
+                <!-- top: offline devloper -->
+                <g transform="translate(8,46)">
+                  <rect x="0" y="0" width="150" height="78" rx="8" style="fill:var(--surface-soft); stroke:var(--border-strong); stroke-width:1.2"/>
+                  <text x="75" y="22" text-anchor="middle" style="fill:var(--text); font-family:var(--mono); font-size:11px;">Developer on plane</text>
+                  <rect x="14" y="32" width="122" height="14" rx="3" style="fill:var(--bg); stroke:var(--border);"/>
+                  <text x="20" y="42" style="fill:var(--text-faint); font-size:10px;">local: full repo + history</text>
+                  <text x="14" y="62" style="fill:var(--accent); font-size:10px;">git log works offline ✓</text>
+                  <text x="14" y="74" style="fill:var(--text-muted); font-size:10px;">push/pull on reconnect</text>
+                </g>
+                <!-- bottom: online agent -->
+                <g transform="translate(8,144)">
+                  <rect x="0" y="0" width="150" height="80" rx="8" style="fill:var(--accent-soft); stroke:var(--accent); stroke-width:1.4"/>
+                  <text x="75" y="22" text-anchor="middle" style="fill:var(--accent); font-family:var(--mono); font-size:11px;">Agent in sandbox</text>
+                  <rect x="14" y="32" width="122" height="14" rx="3" style="fill:var(--bg); stroke:var(--border);"/>
+                  <text x="20" y="42" style="fill:var(--text-faint); font-size:10px;">local: bounded cache</text>
+                  <text x="14" y="62" style="fill:var(--accent); font-size:10px;">blame = round trip ✓</text>
+                  <text x="14" y="74" style="fill:var(--text-muted); font-size:10px;">never disconnects</text>
+                </g>
+                <!-- legend on right -->
+                <g transform="translate(190,46)">
+                  <circle cx="6" cy="14" r="4" style="fill:var(--text-faint)"/>
+                  <text x="18" y="18" style="fill:var(--text); font-size:11px;">+ Plane happens (rare)</text>
+                  <circle cx="6" cy="50" r="4" style="fill:var(--accent)"/>
+                  <text x="18" y="54" style="fill:var(--text); font-size:11px;">+ 25 M CI checkouts / day</text>
+                  <text x="0" y="84" style="fill:var(--text-muted); font-size:11px; font-style:italic;">optimize for the common case,</text>
+                  <text x="0" y="100" style="fill:var(--text-muted); font-size:11px; font-style:italic;">not the rare edge.</text>
+                </g>
+              </svg>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 2. Asymmetry -->
+      <div class="walk-section">
+        <div class="walk-grid">
+          <div>
+            <div class="diagram-card">
+              <div class="lbl">fig 2 / role asymmetry</div>
+              <svg viewBox="0 0 360 200" xmlns="http://www.w3.org/2000/svg">
+                <!-- git side -->
+                <g transform="translate(12,20)">
+                  <text x="0" y="0" style="fill:var(--text-faint); font-family:var(--mono); font-size:10px; letter-spacing:0.08em;">GIT (symmetric)</text>
+                  <rect x="0" y="10" width="60" height="36" rx="6" style="fill:var(--surface-soft); stroke:var(--border-strong);"/>
+                  <text x="30" y="26" text-anchor="middle" style="fill:var(--text); font-size:9px;">clone</text>
+                  <text x="30" y="38" text-anchor="middle" style="fill:var(--text); font-size:9px;">= server</text>
+                  <line x1="60" y1="28" x2="116" y2="28" style="stroke:var(--border-strong); stroke-width:1.5; stroke-dasharray:4 4"/>
+                  <rect x="116" y="10" width="60" height="36" rx="6" style="fill:var(--surface-soft); stroke:var(--border-strong);"/>
+                  <text x="146" y="26" text-anchor="middle" style="fill:var(--text); font-size:9px;">clone</text>
+                  <text x="146" y="38" text-anchor="middle" style="fill:var(--text); font-size:9px;">= server</text>
+                  <text x="0" y="68" style="fill:var(--text-muted); font-size:10px; font-style:italic;">any client can be a server</text>
+                </g>
+                <!-- scion side -->
+                <g transform="translate(12,110)">
+                  <text x="0" y="0" style="fill:var(--accent); font-family:var(--mono); font-size:10px; letter-spacing:0.08em;">SCION (asymmetric)</text>
+                  <rect x="0" y="10" width="80" height="56" rx="6" style="fill:var(--accent-soft); stroke:var(--accent);"/>
+                  <text x="40" y="26" text-anchor="middle" style="fill:var(--accent); font-size:9px; font-family:var(--mono); font-weight:600;">server</text>
+                  <text x="40" y="40" text-anchor="middle" style="fill:var(--text); font-size:9px;">commits, merges,</text>
+                  <text x="40" y="52" text-anchor="middle" style="fill:var(--text); font-size:9px;">rebases, blame</text>
+                  <line x1="80" y1="38" x2="180" y2="38" style="stroke:var(--accent); stroke-width:1.5" marker-end="url(#arrG)"/>
+                  <rect x="180" y="10" width="120" height="56" rx="6" style="fill:var(--surface-soft); stroke:var(--border-strong);"/>
+                  <text x="240" y="26" text-anchor="middle" style="fill:var(--text); font-size:9px; font-family:var(--mono);">thin client</text>
+                  <text x="240" y="40" text-anchor="middle" style="fill:var(--text); font-size:9px;">bounded cache</text>
+                  <text x="240" y="52" text-anchor="middle" style="fill:var(--text); font-size:9px;">+ working copy</text>
+                  <text x="0" y="86" style="fill:var(--text-muted); font-size:10px; font-style:italic;">server owns the work, client owns the bytes</text>
+                </g>
+              </svg>
+            </div>
+          </div>
+          <div class="walk-copy">
+            <h3>2. The server does the work; the client keeps the bytes.</h3>
+            <p>In git, every clone is also a server. A <code>clone</code> can host a <code>remote</code> that other clones fetch from. Anthropic ripped that out. In Scion, the server is authoritative and the client is deliberately dumb. The server creates commits, performs merges, rebases, and answers blame queries.</p>
+            <p>This lets the client discard almost everything. It doesn't compute diffs over local history because there isn't any local history worth mentioning. The trade is that one part of your system now needs to be very good at a lot of things at once, but you also get to scale the two halves independently.</p>
+            <div class="why-box">
+              <span class="lbl">why this matters</span>
+              Symmetry in distributed systems feels like robustness. It also tends to be the thing that breaks first at scale. Decide which role is the load-bearing one and stop pretending every node plays both parts.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 3. Changesets as WAL -->
+      <div class="walk-section">
+        <div class="walk-grid">
+          <div class="walk-copy">
+            <h3>3. A commit becomes a write-ahead-log entry.</h3>
+            <p>A git commit points to a tree. Cheap to write if you're computing the tree locally, expensive if you have to materialize it across a server. Scion flips it: a <code>changeset</code> is just the list of files that changed relative to the first parent, plus content-addressed pointers to the new blobs.</p>
+            <p>No packfiles, no refs to move, no cross-server coordination. The Spanner row that holds the ref is a compare-and-swap that happens after the changeset already exists. The cost of a commit now scales with the size of the change, not the size of the repo. That's the whole throughput trick.</p>
+            <div class="why-box">
+              <span class="lbl">why this matters</span>
+              When merge rate is 30,000 a day, the question "how big is a commit" needs to mean bytes-touched, not repo-touched. Any system whose cost is the wrong one of those will melt under agent load.
+            </div>
+          </div>
+          <div>
+            <div class="diagram-card">
+              <div class="lbl">fig 3 / git commit vs scion changeset</div>
+              <svg viewBox="0 0 360 240" xmlns="http://www.w3.org/2000/svg">
+                <defs>
+                  <marker id="arr3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                    <path d="M0,0 L10,5 L0,10 z" style="fill:var(--text-faint)"/>
+                  </marker>
+                </defs>
+
+                <!-- git commit shape -->
+                <g transform="translate(14,16)">
+                  <text x="0" y="0" style="fill:var(--text-faint); font-family:var(--mono); font-size:10px; letter-spacing:0.08em;">GIT COMMIT</text>
+                  <rect x="0" y="12" width="156" height="56" rx="6" style="fill:var(--surface-soft); stroke:var(--border-strong);"/>
+                  <text x="78" y="32" text-anchor="middle" style="fill:var(--text); font-size:11px; font-family:var(--mono);">commit</text>
+                  <text x="78" y="48" text-anchor="middle" style="fill:var(--text-muted); font-size:10px;">→ tree</text>
+                  <text x="78" y="62" text-anchor="middle" style="fill:var(--text-muted); font-size:10px;">→ blobs</text>
+                  <line x1="78" y1="68" x2="78" y2="100" style="stroke:var(--border-strong); stroke-width:1" marker-end="url(#arr3)"/>
+                  <rect x="0" y="100" width="156" height="60" rx="6" style="fill:var(--surface-soft); stroke:var(--border); stroke-dasharray:3 3"/>
+                  <text x="78" y="118" text-anchor="middle" style="fill:var(--text-faint); font-size:9px; font-family:var(--mono);">whole tree, every time</text>
+                  <text x="78" y="138" text-anchor="middle" style="fill:var(--text-faint); font-size:10px;">cost = repo size</text>
+                </g>
+
+                <!-- scion changeset shape -->
+                <g transform="translate(190,16)">
+                  <text x="0" y="0" style="fill:var(--accent); font-family:var(--mono); font-size:10px; letter-spacing:0.08em;">SCION CHANGESET</text>
+                  <rect x="0" y="12" width="156" height="56" rx="6" style="fill:var(--accent-soft); stroke:var(--accent); stroke-width:1.4"/>
+                  <text x="78" y="32" text-anchor="middle" style="fill:var(--accent); font-size:11px; font-family:var(--mono); font-weight:600;">changeset (WAL)</text>
+                  <text x="78" y="48" text-anchor="middle" style="fill:var(--text); font-size:10px;">files diffed vs parent</text>
+                  <text x="78" y="62" text-anchor="middle" style="fill:var(--text); font-size:10px;">+ content-addressed blobs</text>
+                  <line x1="78" y1="68" x2="78" y2="100" style="stroke:var(--accent); stroke-width:1.5" marker-end="url(#arrG)"/>
+                  <rect x="0" y="100" width="156" height="60" rx="6" style="fill:var(--accent-soft); stroke:var(--accent); stroke-dasharray:3 3">
+                                      <animate attributeName="x" values="0;-2;0" dur="3.2s" repeatCount="indefinite"/>
+                                      </rect>
+                                      <text x="78" y="118" text-anchor="middle" style="fill:var(--accent); font-size:9px; font-family:var(--mono); font-weight:600;">only the diff, every time</text>
+                                      <text x="78" y="138" text-anchor="middle" style="fill:var(--accent); font-size:10px;">cost = change size</text>
+                </g>
+
+                <!-- bottom: derived data feeding -->
+                <g transform="translate(14,200)">
+                  <text x="0" y="14" style="fill:var(--text-muted); font-size:10px; font-family:var(--mono);">derived data (blame, ancestry, path history) computed lazily by one recursive mechanism</text>
+                  <text x="170" y="14" style="fill:var(--accent); font-size:11px; font-family:var(--mono); font-weight:600;">→</text>
+                  <text x="186" y="14" style="fill:var(--text); font-size:10px;">clients never see internals</text>
+                </g>
+              </svg>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 4. API-first + no working copy -->
+      <div class="walk-section">
+        <div class="walk-grid">
+          <div>
+            <div class="diagram-card">
+              <div class="lbl">fig 4 / working copy is optional</div>
+              <svg viewBox="0 0 360 220" xmlns="http://www.w3.org/2000/svg">
+                <defs>
+                  <marker id="arr4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                    <path d="M0,0 L10,5 L0,10 z" style="fill:var(--accent)"/>
+                  </marker>
+                </defs>
+                <g transform="translate(20,18)">
+                  <rect x="0" y="0" width="68" height="40" rx="6" style="fill:var(--surface-soft); stroke:var(--border-strong);"/>
+                  <text x="34" y="22" text-anchor="middle" style="fill:var(--text); font-size:10px; font-family:var(--mono);">CI job</text>
+                  <text x="34" y="34" text-anchor="middle" style="fill:var(--text-muted); font-size:9px;">"did this PR change</text>
+                  <text x="34" y="46" text-anchor="middle" style="fill:var(--text-muted); font-size:9px;">build config?"</text>
+                </g>
+                <line x1="90" y1="38" x2="170" y2="78" style="stroke:var(--accent); stroke-width:1.5" marker-end="url(#arr4)"/>
+                <text x="120" y="56" style="fill:var(--accent); font-size:10px; font-family:var(--mono);">API call</text>
+
+                <g transform="translate(170,68)">
+                  <rect x="0" y="0" width="160" height="80" rx="8" style="fill:var(--accent-soft); stroke:var(--accent); stroke-width:1.4"/>
+                  <text x="80" y="22" text-anchor="middle" style="fill:var(--accent); font-size:11px; font-family:var(--mono); font-weight:600;">Scion API</text>
+                  <text x="80" y="40" text-anchor="middle" style="fill:var(--text); font-size:10px;">compute diff vs merge base</text>
+                  <text x="80" y="56" text-anchor="middle" style="fill:var(--text); font-size:10px;">return: list of paths</text>
+                  <text x="80" y="72" text-anchor="middle" style="fill:var(--text-muted); font-size:9px;">no working copy materialized</text>
+                </g>
+
+                <line x1="170" y1="118" x2="90" y2="160" style="stroke:var(--accent); stroke-width:1.5" marker-end="url(#arr4)"/>
+                <text x="118" y="142" style="fill:var(--accent); font-size:10px; font-family:var(--mono);">["build.toml","ci/Dockerfile"]</text>
+
+                <g transform="translate(20,168)">
+                  <rect x="0" y="0" width="68" height="36" rx="6" style="fill:var(--surface-soft); stroke:var(--border-strong);"/>
+                  <text x="34" y="20" text-anchor="middle" style="fill:var(--text); font-size:10px; font-family:var(--mono);">CI job</text>
+                  <text x="34" y="32" text-anchor="middle" style="fill:var(--accent); font-size:10px;">trigger build ✓</text>
+                </g>
+
+                <!-- bar showing checkout vs API cost -->
+                <g transform="translate(220,168)">
+                  <text x="0" y="0" style="fill:var(--text-faint); font-size:10px; font-family:var(--mono); letter-spacing:0.08em;">CHECKOUT COST</text>
+                  <rect x="0" y="6" width="120" height="8" rx="2" style="fill:var(--border)"/>
+                  <rect x="0" y="6" width="110" height="8" rx="2" style="fill:var(--text-faint)"/>
+                  <text x="0" y="26" style="fill:var(--text-faint); font-size:10px; font-family:var(--mono); letter-spacing:0.08em;">API CALL COST</text>
+                  <rect x="0" y="32" width="120" height="8" rx="2" style="fill:var(--accent-soft)"/>
+                  <rect x="0" y="32" width="6" height="8" rx="2" style="fill:var(--accent)">
+                    <animate attributeName="width" values="3;6;3" dur="2.4s" repeatCount="indefinite"/>
+                  </rect>
+                  <text x="126" y="14" style="fill:var(--text-muted); font-size:9px;">100 GB</text>
+                  <text x="126" y="40" style="fill:var(--accent); font-size:9px;">~kB</text>
+                </g>
+              </svg>
+            </div>
+          </div>
+          <div class="walk-copy">
+            <h3>4. The checkout is optional.</h3>
+            <p>The previous version of this story at Anthropic was, "yes, you have to have a working copy to do anything." Scion quietly makes that false. A CI job that needs to know if a PR touches build config doesn't need to materialize anything. It calls an API and gets back a list of paths.</p>
+            <p>This is more than a perf win. It means the system's prime surface is the API. Every question a client used to ask by reading its local repo becomes a function call. Anthropic's automated bisect, revert, and merge-queue "superfans" all lean on this.</p>
+            <div class="why-box">
+              <span class="lbl">why this matters</span>
+              When the API is the product and the working copy is a thin materialization, agents and humans stop being different kinds of users. Agents just call more of the API more often.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 5. Sparse by default + tiered caches -->
+      <div class="walk-section">
+        <div class="walk-grid">
+          <div class="walk-copy">
+            <h3>5. Sparse by default, tiered caching, no materialized copy.</h3>
+            <p>Git's fetch protocol asks the server, "what do I have, what am I missing, give me a packfile." Scion's protocol asks, "give me exactly this tree, exactly these blobs." It's a tree walk, not a packfile exchange. Every object is content-addressed and immutable, so any cache can answer any request without coordinating with the others.</p>
+            <p>The result is a three-tier topology with a 99% cache hit rate at every layer: <code>scion-daemon</code> on each node, <code>scion-cache</code> per region streaming from memory, <code>scion-servers</code> reading from Spanner. The footprint is 200x smaller than their previous git-mirror setup, and CI jobs check out code in seconds.</p>
+            <div class="why-box">
+              <span class="lbl">why this matters</span>
+              When the cost of fetching scales with what you actually need rather than what you might need, the whole "should I cache this?" question disappears. Most distributed systems are paying for bytes that nobody reads. Stop.
+            </div>
+          </div>
+          <div>
+            <div class="diagram-card">
+              <div class="lbl">fig 5 / tiered checkout topology</div>
+              <svg viewBox="0 0 360 240" xmlns="http://www.w3.org/2000/svg">
+                <defs>
+                  <marker id="arr5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                    <path d="M0,0 L10,5 L0,10 z" style="fill:var(--text-muted)"/>
+                  </marker>
+                </defs>
+
+                <!-- daemon row -->
+                <g transform="translate(18,20)">
+                  <text x="0" y="0" style="fill:var(--text-faint); font-family:var(--mono); font-size:9px; letter-spacing:0.08em;">NODE</text>
+                  <rect x="0" y="6" width="60" height="40" rx="6" style="fill:var(--surface-soft); stroke:var(--border-strong);"/>
+                  <text x="30" y="22" text-anchor="middle" style="fill:var(--text); font-size:9px; font-family:var(--mono);">scion-</text>
+                  <text x="30" y="34" text-anchor="middle" style="fill:var(--text); font-size:9px; font-family:var(--mono);">daemon</text>
+                  <rect x="80" y="6" width="60" height="40" rx="6" style="fill:var(--surface-soft); stroke:var(--border-strong);"/>
+                  <text x="110" y="22" text-anchor="middle" style="fill:var(--text); font-size:9px; font-family:var(--mono);">scion-</text>
+                  <text x="110" y="34" text-anchor="middle" style="fill:var(--text); font-size:9px; font-family:var(--mono);">daemon</text>
+                  <rect x="160" y="6" width="60" height="40" rx="6" style="fill:var(--surface-soft); stroke:var(--border-strong);"/>
+                  <text x="190" y="22" text-anchor="middle" style="fill:var(--text); font-size:9px; font-family:var(--mono);">scion-</text>
+                  <text x="190" y="34" text-anchor="middle" style="fill:var(--text); font-size:9px; font-family:var(--mono);">daemon</text>
+                </g>
+
+                <line x1="48" y1="48" x2="48" y2="84" style="stroke:var(--border-strong); stroke-width:1" marker-end="url(#arr5)">
+                                  <animate attributeName="stroke-dashoffset" values="12;0" dur="1.6s" repeatCount="indefinite"/>
+                                </line>
+                                <line x1="110" y1="48" x2="110" y2="84" style="stroke:var(--border-strong); stroke-width:1" marker-end="url(#arr5)">
+                                  <animate attributeName="stroke-dashoffset" values="12;0" dur="1.6s" begin="0.2s" repeatCount="indefinite"/>
+                                </line>
+                                <line x1="190" y1="48" x2="190" y2="84" style="stroke:var(--border-strong); stroke-width:1" marker-end="url(#arr5)">
+                                  <animate attributeName="stroke-dashoffset" values="12;0" dur="1.6s" begin="0.4s" repeatCount="indefinite"/>
+                                </line>
+
+                <!-- cache row -->
+                <g transform="translate(40,90)">
+                  <rect x="0" y="0" width="200" height="40" rx="8" style="fill:var(--accent-soft); stroke:var(--accent); stroke-width:1.4"/>
+                  <text x="100" y="22" text-anchor="middle" style="fill:var(--accent); font-size:11px; font-family:var(--mono); font-weight:600;">scion-cache (region)</text>
+                  <text x="100" y="34" text-anchor="middle" style="fill:var(--text); font-size:9px;">in-memory, streams in disk format</text>
+                </g>
+
+                <line x1="140" y1="132" x2="140" y2="160" style="stroke:var(--accent); stroke-width:1.4" marker-end="url(#arr5)"/>
+                <text x="148" y="148" style="fill:var(--accent); font-size:10px; font-family:var(--mono);">cache miss</text>
+
+                <!-- server row -->
+                <g transform="translate(40,164)">
+                  <rect x="0" y="0" width="200" height="40" rx="8" style="fill:var(--surface-soft); stroke:var(--border-strong);"/>
+                  <text x="100" y="22" text-anchor="middle" style="fill:var(--text); font-size:11px; font-family:var(--mono);">scion-servers</text>
+                  <text x="100" y="34" text-anchor="middle" style="fill:var(--text-muted); font-size:9px;">compute derived data, read Spanner</text>
+                </g>
+
+                <!-- hit-rate indicators -->
+                <g transform="translate(258,98)">
+                  <text x="0" y="0" style="fill:var(--text-faint); font-size:10px; font-family:var(--mono);">hit rate</text>
+                  <text x="0" y="22" style="fill:var(--accent); font-size:18px; font-family:var(--mono); font-weight:700;">99%+</text>
+                  <text x="0" y="40" style="fill:var(--text-muted); font-size:9px;">every tier</text>
+                </g>
+
+                <!-- throughput arrow -->
+                <line x1="18" y1="226" x2="338" y2="226" style="stroke:var(--accent); stroke-width:1.4" marker-end="url(#arr5)"/>
+                <text x="178" y="220" text-anchor="middle" style="fill:var(--text); font-size:10px; font-family:var(--mono);">200× less CPU & memory than the git mirror fleet</text>
+              </svg>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- COMMON CONFUSIONS -->
+  <section id="conf">
+    <div class="section-head">
+      <div class="label" style="margin-bottom:14px;">Common confusions</div>
+      <h2>Five things<br/>readers get wrong.</h2>
+      <p>This section is the one that makes the rest worth saving. If you only remember two of these, remember "git at scale" and "you're not Anthropic".</p>
+    </div>
+    <div class="confusions container-wide">
+      <div class="conf-card">
+        <span class="num">01 / the size</span>
+        <p class="wrong">Scion matters because Anthropic needed to handle a huge repo.</p>
+        <p class="right">It matters because agent-coded projects push repo size past the design point of every distributed VCS we already had. Piper and Sapling solved the human-scale monorepo; Scion is for the agent-scale one where merge volume dominates. Jai's game studio will hit Sapling-scale problems before it hits Scion-scale problems, but the trajectory is the same.</p>
+      </div>
+      <div class="conf-card">
+        <span class="num">02 / the lesson</span>
+        <p class="wrong">You should replace git with a service.</p>
+        <p class="right">You should ask which of your system's invariants depend on the client being offline and which ones only need the client being reachable. Most "git-like" assumptions are hiding in places that aren't source control: search indices, build caches, asset registries. Identify those, then design the online version of each.</p>
+      </div>
+      <div class="conf-card">
+        <span class="num">03 / the cost model</span>
+        <p class="wrong">A changeset is just a commit with fewer fields.</p>
+        <p class="right">The interesting move is that commit cost now scales with change size, not repo size. That is the load-bearing claim. Any system whose per-write cost was previously the wrong one of those two scales badly under agent load. Hunt for those; the SCM is the canary, not the only thing on fire.</p>
+      </div>
+      <div class="conf-card">
+        <span class="num">04 / the workflow</span>
+        <p class="wrong">Anthropic's engineers spent their time reading code.</p>
+        <p class="right">They mostly read the <em>intent</em> of a change and spent a lot of time telling Claude "no." The interesting failure mode wasn't bugs; it was agents brute-forcing questions that should have been API calls (e.g. reading the commit log linearly to find when something merged) because the system's invariants weren't documented well enough for the model to see them.</p>
+      </div>
+      <div class="conf-card">
+        <span class="num">05 / the takeaway</span>
+        <p class="wrong">Use Scion if your repo is big.</p>
+        <p class="right">Scion is open-sourcing neither the server nor the format; Anthropic's post is a design study, not a distribution. The takeaway is the five principles, plus the superfan pattern, plus the realization that CI at agent throughput is no longer a global lock problem. Use whatever SCM you have, but rebuild the next layer up the stack in this style.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- WHERE TO NEXT -->
+  <section id="next" class="tight">
+    <div class="section-head">
+      <div class="label" style="margin-bottom:14px;">Where to go next</div>
+      <h2>If you want to go deeper.</h2>
+      <p>Three starting points, ordered by depth. Each one teaches a separate piece of the design.</p>
+    </div>
+    <div class="container-wide">
+      <ul class="next-list">
+        <li>
+          <a href="https://www.anthropic.com/engineering/redesigning-source-control">
+            <span>
+              <span class="title">The full Anthropic engineering post</span>
+              <span class="meta">primary source / 13 min read / required</span>
+            </span>
+            <span class="arrow">→</span>
+          </a>
+        </li>
+        <li>
+          <a href="https://news.ycombinator.com/item?id=50073633">
+            <span>
+              <span class="title">The HN thread, 750+ points and counting</span>
+              <span class="meta">community reaction / "git as message queue between agents" is the sharpest critique</span>
+            </span>
+            <span class="arrow">→</span>
+          </a>
+        </li>
+        <li>
+          <a href="https://github.com/facebook/sapling">
+            <span>
+              <span class="title">Sapling, Meta's source control for large monorepos</span>
+              <span class="meta">prior art / the design that bounded Scion's problem space</span>
+            </span>
+            <span class="arrow">→</span>
+          </a>
+        </li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- CLOSING -->
+  <section class="tight" style="padding-top:20px;">
+    <div class="container-narrow" style="text-align:center;">
+      <p style="font-size:16px; color:var(--text-muted); line-height:1.65;">
+        One thing worth sitting with. Scion is not a git replacement. It is what happens when you rebuild one part of the developer stack assuming the cheap part of building is the part we used to optimize around. The hard part of building used to be the typing. The hard part now is whatever's left after the typing goes away.
+      </p>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  Day 17 of the explainer series. Built by Hermes using the explainer-builder skill.
+</footer>
+
+<script>
+  // Theme toggle
+  var btn = document.getElementById('themeBtn');
+  var icon = document.getElementById('themeIcon');
+  function syncIcon(){
+    var dark = document.documentElement.getAttribute('data-theme') === 'dark';
+    if (dark) {
+      icon.innerHTML = '<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>';
+      btn.setAttribute('aria-label','Switch to light mode');
+    } else {
+      icon.innerHTML = '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/>';
+      btn.setAttribute('aria-label','Switch to dark mode');
+    }
+  }
+  syncIcon();
+  btn.addEventListener('click', function(){
+    var cur = document.documentElement.getAttribute('data-theme');
+    var next = cur === 'dark' ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', next);
+    try { localStorage.setItem('theme', next); } catch(e){}
+    syncIcon();
+  });
+</script>
+</body>
+</html>
