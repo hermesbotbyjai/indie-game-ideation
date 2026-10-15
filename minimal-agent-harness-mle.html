@@ -1,0 +1,978 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>The Malena result: when the agent harness stops mattering</title>
+<meta name="description" content="Apple ML Research finds that a minimal coding-agent session beats elaborate multi-agent harnesses on MLE-bench. Here is the model behind the result, and the architectural lesson." />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Geist+Mono:wght@400;500;600&display=swap" />
+<script>
+  // Pre-paint theme detection: runs before stylesheet
+  (function() {
+    try {
+      var saved = localStorage.getItem('theme');
+      var sysDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+      var theme = saved || (sysDark ? 'dark' : 'light');
+      document.documentElement.setAttribute('data-theme', theme);
+    } catch (e) {
+      document.documentElement.setAttribute('data-theme', 'light');
+    }
+  })();
+</script>
+<style>
+  :root {
+    --bg: #ffffff;
+    --bg-soft: #fafaf9;
+    --bg-card: #ffffff;
+    --text: #0d0d0d;
+    --text-muted: #555555;
+    --text-faint: #8a8a8a;
+    --border: rgba(13,13,13,0.08);
+    --border-strong: rgba(13,13,13,0.14);
+    --accent: #18E299;
+    --accent-strong: #10b87a;
+    --accent-soft: rgba(24,226,153,0.10);
+    --accent-fg: #062019;
+    --code-bg: #f4f4f2;
+    --shadow: 0 1px 2px rgba(13,13,13,0.04), 0 8px 24px rgba(13,13,13,0.06);
+    --hero-grad-1: rgba(24,226,153,0.18);
+    --hero-grad-2: rgba(24,226,153,0.04);
+    --diagr-stroke: rgba(13,13,13,0.18);
+    --diagr-stroke-soft: rgba(13,13,13,0.10);
+    --diagr-text: #1a1a1a;
+    --diagr-text-mute: #6b6b6b;
+    --diagr-node-bg: #ffffff;
+    --diagr-node-border: rgba(13,13,13,0.16);
+    --harness-node: #f3f3f1;
+    --agent-node: #f9fdfb;
+  }
+  [data-theme="dark"] {
+    --bg: #0a0a0a;
+    --bg-soft: #0f0f0f;
+    --bg-card: #131313;
+    --text: #f4f4f2;
+    --text-muted: #b3b3b0;
+    --text-faint: #7a7a78;
+    --border: rgba(255,255,255,0.08);
+    --border-strong: rgba(255,255,255,0.14);
+    --accent: #2af5a8;
+    --accent-strong: #18E299;
+    --accent-soft: rgba(42,245,168,0.12);
+    --accent-fg: #04140d;
+    --code-bg: #1c1c1c;
+    --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 8px 24px rgba(0,0,0,0.4);
+    --hero-grad-1: rgba(42,245,168,0.18);
+    --hero-grad-2: rgba(42,245,168,0.03);
+    --diagr-stroke: rgba(255,255,255,0.22);
+    --diagr-stroke-soft: rgba(255,255,255,0.12);
+    --diagr-text: #f0f0ee;
+    --diagr-text-mute: #a5a5a0;
+    --diagr-node-bg: #161616;
+    --diagr-node-border: rgba(255,255,255,0.20);
+    --harness-node: #1a1a1a;
+    --agent-node: #122018;
+  }
+  @media (prefers-color-scheme: dark) {
+    html:not([data-theme="light"]) {
+      --bg: #0a0a0a;
+      --bg-soft: #0f0f0f;
+      --bg-card: #131313;
+      --text: #f4f4f2;
+      --text-muted: #b3b3b0;
+      --text-faint: #7a7a78;
+      --border: rgba(255,255,255,0.08);
+      --border-strong: rgba(255,255,255,0.14);
+      --accent: #2af5a8;
+      --accent-strong: #18E299;
+      --accent-soft: rgba(42,245,168,0.12);
+      --accent-fg: #04140d;
+      --code-bg: #1c1c1c;
+      --hero-grad-1: rgba(42,245,168,0.18);
+      --hero-grad-2: rgba(42,245,168,0.03);
+      --diagr-stroke: rgba(255,255,255,0.22);
+      --diagr-stroke-soft: rgba(255,255,255,0.12);
+      --diagr-text: #f0f0ee;
+      --diagr-text-mute: #a5a5a0;
+      --diagr-node-bg: #161616;
+      --diagr-node-border: rgba(255,255,255,0.20);
+      --harness-node: #1a1a1a;
+      --agent-node: #122018;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    font-size: 17px;
+    line-height: 1.55;
+    color: var(--text);
+    background: var(--bg);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    transition: background 200ms ease, color 200ms ease;
+  }
+  code, pre, .mono { font-family: 'Geist Mono', 'SF Mono', Menlo, monospace; }
+  .label {
+    font-family: 'Geist Mono', monospace;
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+  }
+  .label.accent { color: var(--accent-strong); }
+  .container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 0 24px;
+  }
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 14px;
+    border-radius: 9999px;
+    border: 1px solid var(--border-strong);
+    background: var(--bg-card);
+    font-family: 'Geist Mono', monospace;
+    font-size: 12px;
+    letter-spacing: 0.04em;
+    color: var(--text-muted);
+    text-decoration: none;
+    transition: border-color 200ms, color 200ms;
+  }
+  .pill:hover { border-color: var(--accent); color: var(--text); }
+  .pill .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+  a { color: var(--accent-strong); text-decoration: none; border-bottom: 1px solid transparent; transition: border-color 150ms; }
+  a:hover { border-bottom-color: var(--accent); }
+  /* NAV */
+  .nav {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    background: rgba(255,255,255,0.78);
+    backdrop-filter: saturate(180%) blur(12px);
+    -webkit-backdrop-filter: saturate(180%) blur(12px);
+    border-bottom: 1px solid var(--border);
+  }
+  [data-theme="dark"] .nav { background: rgba(10,10,10,0.75); }
+  .nav-inner {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 24px;
+    max-width: 1200px; margin: 0 auto;
+  }
+  .nav-brand {
+    display: flex; align-items: center; gap: 10px;
+    font-weight: 700; font-size: 15px; color: var(--text);
+  }
+  .nav-brand .mark {
+    width: 22px; height: 22px; border-radius: 6px;
+    background: linear-gradient(135deg, var(--accent) 0%, var(--accent-strong) 100%);
+    display: inline-flex; align-items: center; justify-content: center;
+    font-family: 'Geist Mono', monospace; font-weight: 700; font-size: 12px;
+    color: var(--accent-fg);
+  }
+  .nav-actions { display: flex; align-items: center; gap: 8px; }
+  .theme-toggle {
+    width: 36px; height: 36px;
+    border-radius: 9999px;
+    border: 1px solid var(--border-strong);
+    background: var(--bg-card);
+    cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center;
+    color: var(--text-muted);
+    transition: border-color 200ms, color 200ms;
+  }
+  .theme-toggle:hover { border-color: var(--accent); color: var(--text); }
+  .theme-toggle svg { width: 16px; height: 16px; }
+  .sun { display: none; }
+  [data-theme="dark"] .sun { display: block; }
+  [data-theme="dark"] .moon { display: none; }
+  /* HERO */
+  .hero {
+    position: relative;
+    padding: 96px 0 64px;
+    overflow: hidden;
+  }
+  .hero::before {
+    content: ''; position: absolute; inset: 0;
+    background:
+      radial-gradient(60% 50% at 50% 0%, var(--hero-grad-1) 0%, transparent 70%),
+      radial-gradient(40% 40% at 80% 20%, var(--hero-grad-2) 0%, transparent 70%);
+    pointer-events: none;
+    z-index: 0;
+  }
+  .hero-inner { position: relative; z-index: 1; text-align: center; max-width: 820px; margin: 0 auto; }
+  .hero .label { margin-bottom: 20px; }
+  .hero h1 {
+    font-size: 64px;
+    line-height: 1.05;
+    font-weight: 800;
+    letter-spacing: -0.03em;
+    margin: 0 0 20px;
+    color: var(--text);
+  }
+  .hero .tagline {
+    font-size: 19px;
+    color: var(--text-muted);
+    margin: 0 auto 32px;
+    max-width: 640px;
+  }
+  .hero .what {
+    display: inline-block;
+    text-align: left;
+    background: var(--bg-card);
+    border: 1px solid var(--border-strong);
+    border-radius: 16px;
+    padding: 18px 22px;
+    margin-top: 8px;
+    box-shadow: var(--shadow);
+  }
+  .hero .what ul { list-style: none; padding: 0; margin: 8px 0 0; }
+  .hero .what li {
+    display: flex; align-items: baseline; gap: 10px;
+    font-size: 14.5px; color: var(--text-muted);
+    padding: 4px 0;
+  }
+  .hero .what li::before {
+    content: ''; flex: 0 0 6px; width: 6px; height: 6px;
+    background: var(--accent); border-radius: 50%;
+    align-self: center;
+  }
+  /* GENERIC SECTION */
+  section { padding: 80px 0; border-top: 1px solid var(--border); }
+  section .section-head { max-width: 720px; margin: 0 auto 40px; text-align: center; }
+  section h2 {
+    font-size: 40px;
+    line-height: 1.1;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    margin: 12px 0 12px;
+  }
+  section h2 .accent { color: var(--accent-strong); }
+  section .lede { color: var(--text-muted); font-size: 17px; max-width: 640px; margin: 0 auto; }
+  /* ONE-SENTENCE MODEL */
+  .model {
+    border: 1px solid var(--border-strong);
+    background: var(--bg-card);
+    border-radius: 20px;
+    padding: 36px 32px;
+    text-align: center;
+    max-width: 880px;
+    margin: 0 auto;
+    position: relative;
+    overflow: hidden;
+  }
+  .model::before {
+    content: ''; position: absolute; inset: 0;
+    background: linear-gradient(180deg, var(--accent-soft) 0%, transparent 100%);
+    pointer-events: none;
+    opacity: 0.6;
+  }
+  .model .sentence {
+    position: relative;
+    font-size: 26px;
+    line-height: 1.35;
+    font-weight: 600;
+    letter-spacing: -0.015em;
+    color: var(--text);
+    margin: 12px 0 0;
+  }
+  .model .sentence em { color: var(--accent-strong); font-style: normal; }
+  /* MENTAL MODEL DIAGRAM */
+  .hero-diagram {
+    margin: 56px auto 0;
+    max-width: 720px;
+  }
+  .diagram-caption {
+    text-align: center;
+    color: var(--text-faint);
+    font-size: 13px;
+    margin-top: 16px;
+    font-family: 'Geist Mono', monospace;
+    letter-spacing: 0.04em;
+  }
+  /* WALKTHROUGH */
+  .walk-grid { max-width: 880px; margin: 0 auto; }
+  .walk-step {
+    display: grid;
+    grid-template-columns: 1.05fr 0.95fr;
+    gap: 40px;
+    align-items: center;
+    padding: 48px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .walk-step:last-child { border-bottom: none; }
+  .walk-step:nth-child(even) { direction: rtl; }
+  .walk-step:nth-child(even) > * { direction: ltr; }
+  .walk-step h3 {
+    font-size: 26px;
+    line-height: 1.2;
+    font-weight: 700;
+    letter-spacing: -0.015em;
+    margin: 8px 0 12px;
+  }
+  .walk-step p { font-size: 16.5px; color: var(--text-muted); margin: 0 0 16px; }
+  .walk-step p code, .walk-step li code { font-size: 14px; background: var(--code-bg); padding: 1px 6px; border-radius: 4px; color: var(--text); }
+  .walk-why {
+    margin-top: 18px;
+    padding: 14px 16px;
+    border-left: 2px solid var(--accent);
+    background: var(--accent-soft);
+    border-radius: 0 8px 8px 0;
+    font-size: 14.5px;
+    color: var(--text);
+  }
+  .walk-why .label { display: block; margin-bottom: 4px; }
+  .walk-diagram { width: 100%; }
+  .walk-diagram svg { width: 100%; height: auto; display: block; }
+  /* CONFUSIONS */
+  .confusions { max-width: 880px; margin: 0 auto; display: grid; grid-template-columns: 1fr; gap: 18px; }
+  .confusion {
+    border: 1px solid var(--border-strong);
+    border-radius: 16px;
+    background: var(--bg-card);
+    padding: 24px 26px;
+    display: grid;
+    grid-template-columns: 56px 1fr;
+    gap: 18px;
+    align-items: start;
+  }
+  .confusion .num {
+    font-family: 'Geist Mono', monospace;
+    font-size: 28px;
+    font-weight: 600;
+    color: var(--accent-strong);
+    line-height: 1;
+    padding-top: 4px;
+  }
+  .confusion h4 {
+    font-size: 18px;
+    font-weight: 600;
+    margin: 0 0 8px;
+    color: var(--text);
+  }
+  .confusion .wrong {
+    color: var(--text-faint);
+    font-size: 15px;
+    margin: 0 0 8px;
+    text-decoration: line-through;
+    text-decoration-color: rgba(255,90,90,0.55);
+    text-decoration-thickness: 1.5px;
+  }
+  .confusion .right { color: var(--text); font-size: 15.5px; margin: 0; }
+  /* GO-NEXT */
+  .gonext { max-width: 880px; margin: 0 auto; display: grid; gap: 16px; }
+  .gonext a.card {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: center;
+    gap: 18px;
+    padding: 20px 22px;
+    border: 1px solid var(--border-strong);
+    border-radius: 14px;
+    background: var(--bg-card);
+    color: var(--text);
+    transition: border-color 200ms;
+  }
+  .gonext a.card:hover { border-color: var(--accent); border-bottom-color: var(--accent); }
+  .gonext .gt { font-size: 16px; font-weight: 600; margin: 0 0 4px; }
+  .gonext .gm { font-size: 14px; color: var(--text-muted); margin: 0; }
+  .gonext .arrow {
+    font-family: 'Geist Mono', monospace;
+    color: var(--accent-strong);
+    font-size: 20px;
+  }
+  /* FOOTER */
+  footer {
+    border-top: 1px solid var(--border);
+    padding: 32px 0 56px;
+    color: var(--text-faint);
+    font-size: 13px;
+    text-align: center;
+  }
+  /* RESPONSIVE */
+  @media (max-width: 820px) {
+    .hero { padding: 64px 0 40px; }
+    .hero h1 { font-size: 44px; }
+    section { padding: 56px 0; }
+    section h2 { font-size: 32px; }
+    .walk-step, .walk-step:nth-child(even) { grid-template-columns: 1fr; gap: 24px; direction: ltr; padding: 32px 0; }
+    .model { padding: 28px 20px; }
+    .model .sentence { font-size: 20px; }
+  }
+  /* ANIMATIONS */
+  @keyframes pulseAccent { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
+  @keyframes flowRight {
+    0% { stroke-dashoffset: 24; }
+    100% { stroke-dashoffset: 0; }
+  }
+  @keyframes ringSpin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+  }
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.2; }
+  }
+  .pulse-dot { animation: pulseAccent 1.8s ease-in-out infinite; }
+  .flow-path { stroke-dasharray: 6 6; animation: flowRight 1.6s linear infinite; }
+  .spin { transform-origin: center; animation: ringSpin 16s linear infinite; }
+  .fade-up { animation: fadeUp 600ms ease both; }
+  .cursor-blink { animation: blink 1s steps(2) infinite; }
+  @keyframes drawStroke {
+    from { stroke-dashoffset: 100; }
+    to { stroke-dashoffset: 0; }
+  }
+  @keyframes popIn {
+    0% { transform: scale(0.6); opacity: 0; }
+    60% { transform: scale(1.08); opacity: 1; }
+    100% { transform: scale(1); opacity: 1; }
+  }
+  @keyframes bgShift {
+    0% { transform: translateX(0); }
+    100% { transform: translateX(40px); }
+  }
+  @keyframes bobUp {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-4px); }
+  }
+  .pop-in { transform-origin: center; animation: popIn 600ms cubic-bezier(0.2,0.8,0.4,1.2) both; }
+  .draw-line { stroke-dasharray: 100; stroke-dashoffset: 100; animation: drawStroke 1.2s ease forwards; }
+  .bob { animation: bobUp 2.4s ease-in-out infinite; }
+  @media (prefers-reduced-motion: reduce) {
+    .pulse-dot, .flow-path, .spin, .fade-up, .cursor-blink, .pop-in, .draw-line, .bob {
+      animation: none !important;
+    }
+    .draw-line { stroke-dashoffset: 0; }
+  }
+</style>
+</head>
+<body>
+  <nav class="nav" aria-label="Primary">
+    <div class="nav-inner">
+      <div class="nav-brand">
+        <span class="mark">H</span>
+        <span>Hermes explainers</span>
+      </div>
+      <div class="nav-actions">
+        <a class="pill" href="#model"><span class="dot"></span>Day 18</a>
+        <button class="theme-toggle" id="themeToggle" aria-label="Toggle theme">
+          <svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+          <svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+        </button>
+      </div>
+    </div>
+  </nav>
+
+  <header class="hero">
+    <div class="container hero-inner">
+      <div class="label accent">Day 18 of the explainer series</div>
+      <h1>The Malena result.</h1>
+      <p class="tagline">Apple's October 2026 paper: a one-prompt coding agent with bash and a filesystem beats four state-of-the-art multi-agent harnesses on MLE-bench. The architectural lesson is older than AI.</p>
+      <div class="what">
+        <span class="label">In this explainer</span>
+        <ul>
+          <li>What the "harness" actually wraps, in one mental picture</li>
+          <li>The four intervention families Apple ablated, and which one moved the needle</li>
+          <li>Why the model became the bottleneck once the primitive changed</li>
+          <li>The architectural reading: post-training replaced the framework</li>
+        </ul>
+      </div>
+
+      <div class="hero-diagram">
+        <svg viewBox="0 0 720 320" role="img" aria-label="Mental model: the coding agent sits inside the harness; the harness sits between the model and the environment.">
+          <defs>
+            <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" style="fill: var(--accent-strong);" />
+            </marker>
+          </defs>
+
+          <!-- Outer harness box -->
+          <rect x="40" y="40" width="640" height="240" rx="18" ry="18"
+                style="fill: var(--harness-node); stroke: var(--diagr-stroke); stroke-width: 1.5; stroke-dasharray: 4 6;" />
+          <text x="60" y="68" class="mono" style="fill: var(--diagr-text-mute); font-size: 11px; letter-spacing: 0.14em;">HARNESS  /  SCAFFOLDING</text>
+
+          <!-- The model box -->
+          <rect x="240" y="100" width="240" height="72" rx="14" ry="14"
+                class="pop-in"
+                style="fill: var(--diagr-node-bg); stroke: var(--accent); stroke-width: 1.8;" />
+          <text x="360" y="132" text-anchor="middle" style="fill: var(--diagr-text); font-size: 17px; font-weight: 600;">LLM backbone</text>
+          <text x="360" y="152" text-anchor="middle" style="fill: var(--diagr-text-mute); font-size: 12px; font-family: 'Geist Mono', monospace;">gemini-3 / glm-5.2 / gpt-5.5 / sonnet-4.5</text>
+
+          <!-- Inner primitive box (the coding agent) -->
+          <rect x="140" y="200" width="440" height="60" rx="12" ry="12"
+                style="fill: var(--agent-node); stroke: var(--accent); stroke-width: 1.5;" />
+          <text x="360" y="226" text-anchor="middle" style="fill: var(--diagr-text); font-size: 14px; font-weight: 600;">coding-agent primitive</text>
+          <text x="360" y="246" text-anchor="middle" style="fill: var(--diagr-text-mute); font-size: 12px; font-family: 'Geist Mono', monospace;">read_file  ·  write_file  ·  bash  ·  one long session</text>
+
+          <!-- HARNESS building blocks on the left (faded / decorative of the outer machinery) -->
+          <g opacity="0.95">
+            <rect x="60" y="100" width="148" height="22" rx="6"
+                  style="fill: var(--bg-card); stroke: var(--diagr-stroke-soft); stroke-width: 1;" />
+            <text x="134" y="115" text-anchor="middle" style="fill: var(--diagr-text-mute); font-size: 11px; font-family: 'Geist Mono', monospace;">planner agent</text>
+
+            <rect x="60" y="128" width="148" height="22" rx="6"
+                  style="fill: var(--bg-card); stroke: var(--diagr-stroke-soft); stroke-width: 1;" />
+            <text x="134" y="143" text-anchor="middle" style="fill: var(--diagr-text-mute); font-size: 11px; font-family: 'Geist Mono', monospace;">retrieval subagent</text>
+
+            <rect x="60" y="156" width="148" height="22" rx="6"
+                  style="fill: var(--bg-card); stroke: var(--diagr-stroke-soft); stroke-width: 1;" />
+            <text x="134" y="171" text-anchor="middle" style="fill: var(--diagr-text-mute); font-size: 11px; font-family: 'Geist Mono', monospace;">critic / scorer loop</text>
+
+            <rect x="60" y="184" width="148" height="22" rx="6"
+                  style="fill: var(--bg-card); stroke: var(--diagr-stroke-soft); stroke-width: 1;" />
+            <text x="134" y="199" text-anchor="middle" style="fill: var(--diagr-text-mute); font-size: 11px; font-family: 'Geist Mono', monospace;">search tree over code</text>
+          </g>
+
+          <!-- Right side: environment -->
+          <g>
+            <rect x="512" y="100" width="148" height="106" rx="12"
+                  style="fill: var(--bg-card); stroke: var(--diagr-stroke); stroke-width: 1;" />
+            <text x="586" y="122" text-anchor="middle" style="fill: var(--diagr-text); font-size: 13px; font-weight: 600;">environment</text>
+            <text x="586" y="142" text-anchor="middle" style="fill: var(--diagr-text-mute); font-size: 11px; font-family: 'Geist Mono', monospace;">filesystem</text>
+            <text x="586" y="158" text-anchor="middle" style="fill: var(--diagr-text-mute); font-size: 11px; font-family: 'Geist Mono', monospace;">shell</text>
+            <text x="586" y="174" text-anchor="middle" style="fill: var(--diagr-text-mute); font-size: 11px; font-family: 'Geist Mono', monospace;">process spawn</text>
+            <text x="586" y="194" text-anchor="middle" style="fill: var(--text-faint); font-size: 10px; font-family: 'Geist Mono', monospace;">the part that</text>
+            <text x="586" y="204" text-anchor="middle" style="fill: var(--text-faint); font-size: 10px; font-family: 'Geist Mono', monospace;">actually matters</text>
+          </g>
+
+          <!-- The big arrow from model to environment, going THROUGH the primitive -->
+          <line x1="360" y1="172" x2="360" y2="198" style="stroke: var(--accent); stroke-width: 2;" marker-end="url(#arr)" />
+          <line x1="480" y1="230" x2="512" y2="180" style="stroke: var(--accent); stroke-width: 2;" marker-end="url(#arr)" />
+
+          <!-- Skip-the-scaffolding arrow with a slash, showing the harness is bypassed -->
+          <g>
+            <path d="M 200 135 Q 360 60 540 135" style="fill: none; stroke: var(--accent); stroke-width: 1.5; stroke-dasharray: 4 4; opacity: 0.55;" marker-end="url(#arr)" />
+            <text x="360" y="50" text-anchor="middle" style="fill: var(--accent-strong); font-size: 11px; font-family: 'Geist Mono', monospace; letter-spacing: 0.1em;">SKIP THE SCAFFOLDING</text>
+          </g>
+
+          <!-- Pulse dot on the accent path -->
+          <circle cx="540" cy="135" r="5" class="pulse-dot" style="fill: var(--accent);" />
+        </svg>
+        <div class="diagram-caption">Figure 1. The coding-agent primitive gives the model direct hands. The harness sits around it. Apple found the harness is mostly noise once the primitive is in place.</div>
+      </div>
+    </div>
+  </header>
+
+  <section id="model">
+    <div class="container">
+      <div class="section-head">
+        <div class="label accent">The model in one sentence</div>
+      </div>
+      <div class="model fade-up">
+        <span class="label">Read this first</span>
+        <p class="sentence">For an autonomous MLE agent, performance is set by the <em>coding-agent primitive</em> (a model with shell and filesystem in one long session), not by the multi-agent scaffolding built on top of it.[1][3]</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="walkthrough">
+    <div class="container">
+      <div class="section-head">
+        <div class="label">Walkthrough</div>
+        <h2>Five ideas, in order, each earns the next.</h2>
+        <p class="lede">Each section is one paragraph plus one diagram plus a "why this matters" callout. Read them in order, or jump to the picture you need.</p>
+      </div>
+
+      <div class="walk-grid">
+
+        <div class="walk-step">
+          <div>
+            <div class="label">01 · Setup</div>
+            <h3>What is a "harness" anyway?</h3>
+            <p>An MLE agent is a <code>model + harness + environment</code> triple. The model produces text. The environment is the filesystem, the shell, the GPU, the dataset, the leaderboard. The harness is everything in between: the loop that runs the model, parses its output, dispatches tool calls, scores results, and decides what to try next.[1]</p>
+            <p>Over the last two years, harnesses got fancy. <code>AiScientist</code> wraps the model in a hierarchical research team with a <code>File-as-Bus</code> shared workspace. <code>MLEvolve</code> searches over candidate solutions. <code>Arbor</code> and <code>ScienceFlow</code> each add their own autonomy layer. The folk theory was: more structure, more reliable work.[4][1]</p>
+            <div class="walk-why">
+              <span class="label">Why this matters</span>
+              Apple's whole paper is one ablation. To call the result a "minimal agent beats a complex one" story, you have to agree on what counts as complex. The harness is the unit they held constant so the model could vary cleanly.
+            </div>
+          </div>
+          <div class="walk-diagram">
+            <svg viewBox="0 0 360 280" role="img" aria-label="Anatomy of a harness: planner, retrieval, critic, search, dispatch.">
+              <defs>
+                <marker id="arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                  <path d="M 0 0 L 10 5 L 0 10 z" style="fill: var(--diagr-stroke);" />
+                </marker>
+              </defs>
+              <rect x="10" y="10" width="340" height="260" rx="14" style="fill: var(--harness-node); stroke: var(--diagr-stroke-soft); stroke-dasharray: 4 5; stroke-width: 1;" />
+              <text x="22" y="34" class="mono" style="fill: var(--diagr-text-mute); font-size: 10px; letter-spacing: 0.14em;">HARNESS LAYERS</text>
+
+              <g style="font-family: 'Geist Mono', monospace; font-size: 11px;">
+                <rect x="30" y="50" width="300" height="28" rx="6" style="fill: var(--bg-card); stroke: var(--diagr-stroke-soft);"/>
+                <text x="44" y="69" style="fill: var(--diagr-text);">1. plan / decompose task</text>
+
+                <rect x="30" y="86" width="300" height="28" rx="6" style="fill: var(--bg-card); stroke: var(--diagr-stroke-soft);"/>
+                <text x="44" y="105" style="fill: var(--diagr-text);">2. retrieve docs / prior runs</text>
+
+                <rect x="30" y="122" width="300" height="28" rx="6" style="fill: var(--bg-card); stroke: var(--diagr-stroke-soft);"/>
+                <text x="44" y="141" style="fill: var(--diagr-text);">3. dispatch to LLM, parse output</text>
+
+                <rect x="30" y="158" width="300" height="28" rx="6" style="fill: var(--bg-card); stroke: var(--diagr-stroke-soft);"/>
+                <text x="44" y="177" style="fill: var(--diagr-text);">4. execute code, capture trace</text>
+
+                <rect x="30" y="194" width="300" height="28" rx="6" style="fill: var(--bg-card); stroke: var(--diagr-stroke-soft);"/>
+                <text x="44" y="213" style="fill: var(--diagr-text);">5. score, branch, log to memory</text>
+              </g>
+
+              <line x1="180" y1="222" x2="180" y2="248" style="stroke: var(--diagr-stroke); stroke-width: 1;" marker-end="url(#arr2)" />
+              <text x="180" y="262" text-anchor="middle" class="mono" style="fill: var(--text-faint); font-size: 10px;">to LLM</text>
+
+              <!-- highlight ring sweeps down through the five harness layers -->
+              <rect x="30" y="50" width="300" height="28" rx="6" style="fill: none; stroke: var(--accent); stroke-width: 1.5; opacity: 0.0;">
+                <animate attributeName="y" values="50;86;122;158;194;194" dur="3.6s" begin="0.4s" repeatCount="indefinite" />
+                <animate attributeName="opacity" values="0;0.9;0.9;0" keyTimes="0;0.15;0.85;1" dur="3.6s" begin="0.4s" repeatCount="indefinite" />
+              </rect>
+            </svg>
+          </div>
+        </div>
+
+        <div class="walk-step">
+          <div>
+            <div class="label">02 · The ladder</div>
+            <h3>Four intervention families, in a fixed stack.</h3>
+            <p>Apple rebuilt every common intervention inside one codebase, then climbed a ladder holding the backbone, hardware, and time budget fixed at every step.[1] The families, in the order they stacked on top of each other:</p>
+            <p><code>execution environment</code> (chat vs coding-agent loop) → <code>search</code> (single shot vs tree vs population) → <code>autonomy</code> (how long a single session runs) → <code>multi-agent orchestration</code> (planner, critic, specialist roles). They measured the medal rate on <code>MLE-bench</code> and <code>NatureBench</code> at every rung.[1][5]</p>
+            <div class="walk-why">
+              <span class="label">Why this matters</span>
+              A ladder is the right shape for a confound. If the elaborate systems beat the simple one, the gap should grow as you climb. Apple found it did not, and almost all the gain sat on the very first rung.
+            </div>
+          </div>
+          <div class="walk-diagram">
+            <svg viewBox="0 0 360 280" role="img" aria-label="Ladder of four intervention families with the first rung dominating the gain.">
+              <text x="180" y="22" text-anchor="middle" class="mono" style="fill: var(--diagr-text-mute); font-size: 10px; letter-spacing: 0.14em;">INTERVENTION LADDER</text>
+
+              <g style="font-family: 'Geist Mono', monospace; font-size: 11px;">
+                <!-- rung 1, biggest gain -->
+                <rect x="40" y="40" width="280" height="34" rx="6" style="fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.5;" />
+                <text x="56" y="62" style="fill: var(--text); font-weight: 600;">1. environment: chat → coding agent</text>
+                <text x="312" y="62" text-anchor="end" style="fill: var(--accent-strong); font-weight: 700;">+15.4pp</text>
+
+                <rect x="60" y="84" width="260" height="30" rx="6" style="fill: var(--bg-card); stroke: var(--diagr-stroke-soft);"/>
+                <text x="76" y="104" style="fill: var(--diagr-text);">2. search (single → tree → population)</text>
+                <text x="312" y="104" text-anchor="end" style="fill: var(--diagr-text-mute);">≈ 0</text>
+
+                <rect x="80" y="124" width="240" height="30" rx="6" style="fill: var(--bg-card); stroke: var(--diagr-stroke-soft);"/>
+                <text x="96" y="144" style="fill: var(--diagr-text);">3. autonomy (session length)</text>
+                <text x="312" y="144" text-anchor="end" style="fill: var(--diagr-text-mute);">≈ 0</text>
+
+                <rect x="100" y="164" width="220" height="30" rx="6" style="fill: var(--bg-card); stroke: var(--diagr-stroke-soft);"/>
+                <text x="116" y="184" style="fill: var(--diagr-text);">4. multi-agent orchestration</text>
+                <text x="312" y="184" text-anchor="end" style="fill: var(--diagr-text-mute);">≈ 0</text>
+              </g>
+
+              <!-- a flat-line graph showing first rung is the spike, then flat -->
+              <g transform="translate(40, 210)">
+                <line x1="0" y1="40" x2="280" y2="40" style="stroke: var(--diagr-stroke-soft); stroke-width: 1;" />
+                <line x1="0" y1="0" x2="0" y2="40" style="stroke: var(--diagr-stroke-soft); stroke-width: 1;" />
+                <text x="-6" y="6" text-anchor="end" class="mono" style="fill: var(--text-faint); font-size: 9px;">gain</text>
+                <polyline points="0,40 0,4 70,4 140,4 210,4 280,4"
+                          style="fill: none; stroke: var(--accent); stroke-width: 2;" />
+                <circle cx="0" cy="4" r="3.5" style="fill: var(--accent);" />
+                <circle cx="70" cy="4" r="3" style="fill: var(--accent); opacity: 0.7;">
+                  <animate attributeName="r" values="3;4.5;3" dur="1.8s" repeatCount="indefinite" begin="0.3s" />
+                </circle>
+                <circle cx="140" cy="4" r="3" style="fill: var(--accent); opacity: 0.7;">
+                  <animate attributeName="r" values="3;4.5;3" dur="1.8s" repeatCount="indefinite" begin="0.6s" />
+                </circle>
+                <circle cx="210" cy="4" r="3" style="fill: var(--accent); opacity: 0.7;">
+                  <animate attributeName="r" values="3;4.5;3" dur="1.8s" repeatCount="indefinite" begin="0.9s" />
+                </circle>
+                <circle cx="280" cy="4" r="3" style="fill: var(--accent); opacity: 0.7;">
+                  <animate attributeName="r" values="3;4.5;3" dur="1.8s" repeatCount="indefinite" begin="1.2s" />
+                </circle>
+              </g>
+            </svg>
+          </div>
+        </div>
+
+        <div class="walk-step">
+          <div>
+            <div class="label">03 · The result</div>
+            <h3>One rung, the whole gap.</h3>
+            <p>With <code>GLM 5.2</code> as the backbone, Apple's <code>Malena</code> agent (a single well-prompted coding-agent session with three tools) earned a medal on <strong>62.5%</strong> of <code>MLE-bench</code> competitions. The best external harness they tested, <code>AiScientist</code>, managed <strong>47.1%</strong>. The harness on the wrong side of the gap was the more elaborate one.[1][3]</p>
+            <p>Across every frontier backbone they tried, the matched comparison either favoured Malena or found no significant difference. The ablation gave the same shape. Search, autonomy, and multi-agent orchestration each added nothing statistically significant once the model was in a coding-agent environment.[1]</p>
+            <div class="walk-why">
+              <span class="label">Why this matters</span>
+              Two effects usually muddy this kind of paper: the harness is tested against a weaker model, or a different model is used for each harness. Apple pinned both. That is why the 15.4pp gap is a real architectural claim and not a model-better-than-another-model claim.
+            </div>
+          </div>
+          <div class="walk-diagram">
+            <svg viewBox="0 0 360 280" role="img" aria-label="Bar comparison: Malena 62.5 percent vs AiScientist 47.1 percent on MLE-bench.">
+              <text x="180" y="22" text-anchor="middle" class="mono" style="fill: var(--diagr-text-mute); font-size: 10px; letter-spacing: 0.14em;">MLE-BENCH · ANY MEDAL RATE</text>
+
+              <g style="font-family: 'Geist Mono', monospace; font-size: 11px;">
+                <text x="20" y="60" style="fill: var(--diagr-text);">Malena</text>
+                <text x="20" y="78" style="fill: var(--diagr-text-mute); font-size: 10px;">single-session, 3 tools</text>
+                <rect x="160" y="48" width="0" height="22" rx="4" style="fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1;" />
+                <rect class="bar-malena" x="160" y="48" width="160" height="22" rx="4" style="fill: var(--accent);">
+                  <animate attributeName="width" from="0" to="160" dur="1.2s" fill="freeze" begin="0.2s" />
+                </rect>
+                <text x="328" y="64" style="fill: var(--text); font-weight: 600;">62.5%</text>
+
+                <text x="20" y="120" style="fill: var(--diagr-text);">AiScientist</text>
+                <text x="20" y="138" style="fill: var(--diagr-text-mute); font-size: 10px;">multi-agent, File-as-Bus</text>
+                <rect class="bar-ai" x="160" y="108" width="0" height="22" rx="4" style="fill: var(--harness-node); stroke: var(--diagr-stroke); stroke-width: 1;">
+                  <animate attributeName="width" from="0" to="120" dur="1.2s" fill="freeze" begin="0.5s" />
+                </rect>
+                <text x="288" y="124" style="fill: var(--text); font-weight: 600;">47.1%</text>
+
+                <text x="20" y="180" style="fill: var(--diagr-text);">MLEvolve</text>
+                <text x="20" y="198" style="fill: var(--diagr-text-mute); font-size: 10px;">population search</text>
+                <rect class="bar-ai" x="160" y="168" width="0" height="22" rx="4" style="fill: var(--harness-node); stroke: var(--diagr-stroke); stroke-width: 1;">
+                  <animate attributeName="width" from="0" to="108" dur="1.2s" fill="freeze" begin="0.7s" />
+                </rect>
+                <text x="276" y="184" style="fill: var(--text); font-weight: 600;">44.0%</text>
+
+                <text x="20" y="240" style="fill: var(--diagr-text);">Arbor / ScienceFlow</text>
+                <text x="20" y="256" style="fill: var(--diagr-text-mute); font-size: 10px;">specialist autonomy</text>
+                <rect class="bar-ai" x="160" y="226" width="0" height="22" rx="4" style="fill: var(--harness-node); stroke: var(--diagr-stroke); stroke-width: 1;">
+                  <animate attributeName="width" from="0" to="92" dur="1.2s" fill="freeze" begin="0.9s" />
+                </rect>
+                <text x="260" y="242" style="fill: var(--text); font-weight: 600;">39.5%</text>
+              </g>
+            </svg>
+          </div>
+        </div>
+
+        <div class="walk-step">
+          <div>
+            <div class="label">04 · Why</div>
+            <h3>The agent is already doing the search.</h3>
+            <p>The trace analysis is the part nobody skims to. Malena has no hard-coded search tree, no explicit exploration/exploitation schedule, no population. Yet when you read its session, you see the same shape: early turns try genuinely rare techniques, later turns refine around the strongest runs, and checkpoints, utility scripts, and dataset caches are reused across iterations.[1]</p>
+            <p>The capability that hand-coded harnesses were designed to elicit from a chat-only model is now a behaviour the model produces on its own when it is allowed to read, write, and run code in one place. The scaffolding has been moved into the post-training.[1][3]</p>
+            <div class="walk-why">
+              <span class="label">Why this matters</span>
+              This is the bitter lesson, exactly. The thing you hand-engineered last year is the thing the model learned this year. Re-implementing it on top is double work.
+            </div>
+          </div>
+          <div class="walk-diagram">
+            <svg viewBox="0 0 360 280" role="img" aria-label="Timeline of a Malena session: explore rare techniques, refine on leaders, reuse artifacts.">
+              <text x="180" y="22" text-anchor="middle" class="mono" style="fill: var(--diagr-text-mute); font-size: 10px; letter-spacing: 0.14em;">ONE SESSION TIMELINE</text>
+
+              <line x1="40" y1="60" x2="320" y2="60" style="stroke: var(--diagr-stroke); stroke-width: 1;" />
+              <circle cx="40" cy="60" r="6" style="fill: var(--accent);" />
+              <text x="40" y="86" text-anchor="middle" class="mono" style="fill: var(--text-faint); font-size: 10px;">t=0</text>
+              <text x="40" y="100" text-anchor="middle" style="fill: var(--text); font-size: 11px;">read task</text>
+
+              <circle cx="120" cy="60" r="6" style="fill: var(--accent);">
+                <animate attributeName="r" values="6;8;6" dur="1.6s" repeatCount="indefinite" begin="0.4s" />
+              </circle>
+              <text x="120" y="86" text-anchor="middle" class="mono" style="fill: var(--text-faint); font-size: 10px;">0–25%</text>
+              <text x="120" y="100" text-anchor="middle" style="fill: var(--text); font-size: 11px;">try rare tricks</text>
+
+              <circle cx="200" cy="60" r="6" style="fill: var(--accent);">
+                <animate attributeName="r" values="6;8;6" dur="1.6s" repeatCount="indefinite" begin="0.8s" />
+              </circle>
+              <text x="200" y="86" text-anchor="middle" class="mono" style="fill: var(--text-faint); font-size: 10px;">25–70%</text>
+              <text x="200" y="100" text-anchor="middle" style="fill: var(--text); font-size: 11px;">refine on leaders</text>
+
+              <circle cx="280" cy="60" r="6" style="fill: var(--accent);">
+                <animate attributeName="r" values="6;8;6" dur="1.6s" repeatCount="indefinite" begin="1.2s" />
+              </circle>
+              <text x="280" y="86" text-anchor="middle" class="mono" style="fill: var(--text-faint); font-size: 10px;">70–100%</text>
+              <text x="280" y="100" text-anchor="middle" style="fill: var(--text); font-size: 11px;">reuse artifacts</text>
+
+              <!-- sub-bar showing intensity -->
+              <g transform="translate(40, 130)">
+                <text x="0" y="0" class="mono" style="fill: var(--text-faint); font-size: 10px;">session length (token budget)</text>
+                <rect x="0" y="10" width="0" height="14" rx="3" style="fill: var(--accent-soft); stroke: var(--accent);">
+                  <animate attributeName="width" from="0" to="280" dur="2s" fill="freeze" />
+                </rect>
+                <rect x="0" y="30" width="0" height="14" rx="3" style="fill: var(--harness-node); stroke: var(--diagr-stroke-soft);">
+                  <animate attributeName="width" from="0" to="280" dur="2s" fill="freeze" begin="0.2s" />
+                </rect>
+                <text x="0" y="58" class="mono" style="fill: var(--text-mute); font-size: 9px;">reads</text>
+                <text x="0" y="72" class="mono" style="fill: var(--text-mute); font-size: 9px;">runs</text>
+              </g>
+
+              <!-- terminal-style cursor -->
+              <g transform="translate(40, 220)">
+                <rect x="0" y="0" width="280" height="40" rx="6" style="fill: var(--bg-card); stroke: var(--diagr-stroke-soft);" />
+                <text x="10" y="18" class="mono" style="fill: var(--text-mute); font-size: 11px;">$ python train.py --lr 3e-4</text>
+                <text x="10" y="32" class="mono" style="fill: var(--text-faint); font-size: 11px;">val_score=0.812  <tspan class="cursor-blink" style="fill: var(--accent);">▍</tspan></text>
+              </g>
+            </svg>
+          </div>
+        </div>
+
+        <div class="walk-step">
+          <div>
+            <div class="label">05 · The lesson</div>
+            <h3>The framework moved into the model.</h3>
+            <p>Read the paper in two paragraphs and you have the entire architectural lesson. When the primitive was "a single chat completion," the harness had to do everything around it: run the code, remember the run, score the result, branch the next try. Coding-focused post-training changed the primitive to a long-lived agent that reads files, writes files, runs bash, and debugs inside one session.[1]</p>
+            <p>So the harness did not get worse. The model got the harness's old job. Effort spent re-elaborating the framework is effort spent re-implementing behaviour the post-training already gave you. The leverage moved up the stack, to the model and the runtime it is given.[1]</p>
+            <div class="walk-why">
+              <span class="label">Why this matters for architects</span>
+              Two practical reads. One: when you evaluate an agent harness, hold the model constant or your conclusion is suspect. Two: when you build a new agent, spend the budget on the post-training and the runtime, not on the orchestration layer. Most of the obvious wins have already been internalized.
+            </div>
+          </div>
+          <div class="walk-diagram">
+            <svg viewBox="0 0 360 280" role="img" aria-label="Stack diagram showing where the work used to live in the harness and where it lives now in the model.">
+              <text x="180" y="22" text-anchor="middle" class="mono" style="fill: var(--diagr-text-mute); font-size: 10px; letter-spacing: 0.14em;">WHERE THE WORK LIVES</text>
+
+              <text x="48" y="60" class="mono" style="fill: var(--text-faint); font-size: 10px;">2024</text>
+              <text x="216" y="60" class="mono" style="fill: var(--text-faint); font-size: 10px;">2026</text>
+
+              <line x1="180" y1="46" x2="180" y2="270" style="stroke: var(--diagr-stroke-soft); stroke-width: 1; stroke-dasharray: 3 3;" />
+
+              <g>
+                <rect x="20" y="72" width="140" height="22" rx="4" style="fill: var(--harness-node); stroke: var(--diagr-stroke);"/>
+                <text x="90" y="87" text-anchor="middle" class="mono" style="fill: var(--text); font-size: 10px;">planner agent</text>
+
+                <rect x="200" y="72" width="140" height="22" rx="4" style="fill: var(--harness-node); stroke: var(--diagr-stroke);"/>
+                <text x="270" y="87" text-anchor="middle" class="mono" style="fill: var(--text); font-size: 10px;">planner agent</text>
+
+                <rect x="20" y="100" width="140" height="22" rx="4" style="fill: var(--harness-node); stroke: var(--diagr-stroke);"/>
+                <text x="90" y="115" text-anchor="middle" class="mono" style="fill: var(--text); font-size: 10px;">retrieval subagent</text>
+
+                <rect x="200" y="100" width="140" height="22" rx="4" style="fill: var(--agent-node); stroke: var(--accent);"/>
+                <text x="270" y="115" text-anchor="middle" class="mono" style="fill: var(--text); font-size: 10px;">retrieval (in-model)</text>
+
+                <rect x="20" y="128" width="140" height="22" rx="4" style="fill: var(--harness-node); stroke: var(--diagr-stroke);"/>
+                <text x="90" y="143" text-anchor="middle" class="mono" style="fill: var(--text); font-size: 10px;">critic / scorer</text>
+
+                <rect x="200" y="128" width="140" height="22" rx="4" style="fill: var(--agent-node); stroke: var(--accent);"/>
+                <text x="270" y="143" text-anchor="middle" class="mono" style="fill: var(--text); font-size: 10px;">critic (in-model)</text>
+
+                <rect x="20" y="156" width="140" height="22" rx="4" style="fill: var(--harness-node); stroke: var(--diagr-stroke);"/>
+                <text x="90" y="171" text-anchor="middle" class="mono" style="fill: var(--text); font-size: 10px;">search over code</text>
+
+                <rect x="200" y="156" width="140" height="22" rx="4" style="fill: var(--agent-node); stroke: var(--accent);"/>
+                <text x="270" y="171" text-anchor="middle" class="mono" style="fill: var(--text); font-size: 10px;">adaptive search (in-session)</text>
+
+                <rect x="20" y="184" width="140" height="22" rx="4" style="fill: var(--harness-node); stroke: var(--diagr-stroke);"/>
+                <text x="90" y="199" text-anchor="middle" class="mono" style="fill: var(--text); font-size: 10px;">memory / scratchpad</text>
+
+                <rect x="200" y="184" width="140" height="22" rx="4" style="fill: var(--agent-node); stroke: var(--accent);"/>
+                <text x="270" y="199" text-anchor="middle" class="mono" style="fill: var(--text); font-size: 10px;">file system (in-session)</text>
+              </g>
+
+              <text x="90" y="232" text-anchor="middle" style="fill: var(--text-faint); font-size: 11px;">harness did this</text>
+              <text x="270" y="232" text-anchor="middle" style="fill: var(--accent-strong); font-size: 11px; font-weight: 600;">model does this</text>
+
+              <line x1="200" y1="100" x2="180" y2="156" style="stroke: var(--accent); stroke-width: 1.5;" marker-end="url(#arr)" />
+              <circle cx="200" cy="120" r="3.5" style="fill: var(--accent);">
+                <animate attributeName="cx" values="200;180;200" dur="2.4s" repeatCount="indefinite" />
+                <animate attributeName="cy" values="100;156;100" dur="2.4s" repeatCount="indefinite" />
+                <animate attributeName="opacity" values="0;1;1;0" keyTimes="0;0.2;0.8;1" dur="2.4s" repeatCount="indefinite" />
+              </circle>
+              <text x="200" y="260" class="mono" style="fill: var(--accent-strong); font-size: 11px;">work migrated up the stack</text>
+            </svg>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <section id="confusions">
+    <div class="container">
+      <div class="section-head">
+        <div class="label">Common confusions</div>
+        <h2>Four things people get wrong.</h2>
+        <p class="lede">If the result feels uncomfortable, it is usually because one of these is in the way.</p>
+      </div>
+
+      <div class="confusions">
+        <div class="confusion">
+          <div class="num">01</div>
+          <div>
+            <h4>"So multi-agent systems are dead."</h4>
+            <p class="wrong">No harness architecture is useful anymore.</p>
+            <p class="right">The paper is about MLE benchmarks with frontier backbones in 2026. The authors are explicit: "How to properly coordinate strong agents towards a common goal remains an open question."[1] What changed is that the cheap, easy wins of multi-agent scaffolding have been internalized by post-training. Coordination of genuinely different agents on a shared goal is a separate research question, and the result does not close it.</p>
+          </div>
+        </div>
+
+        <div class="confusion">
+          <div class="num">02</div>
+          <div>
+            <h4>"This means the model is all that matters."</h4>
+            <p class="wrong">Just pick a smarter model and stop engineering the harness.</p>
+            <p class="right">Backbone is the dominant driver <em>after</em> the coding-agent environment is in place. Before that, the runtimes are nearly indistinguishable. The paper is not "models are magic." It is "the runtime gives the model its hands, and the rest of the harness stopped moving the score."[1]</p>
+          </div>
+        </div>
+
+        <div class="confusion">
+          <div class="num">03</div>
+          <div>
+            <h4>"This will generalize to every agent task."</h4>
+            <p class="wrong">Coding-agent loops beat everything everywhere.</p>
+            <p class="right">The benchmarks here are MLE-bench and NatureBench: open-ended ML pipelines, hours of compute, a noisy validation score. Tasks that need long-running state across humans, real-time responsiveness, or hardware the model cannot access via bash are a different story. The paper does not claim universal dominance, only matched-condition parity on MLE-style work.</p>
+          </div>
+        </div>
+
+        <div class="confusion">
+          <div class="num">04</div>
+          <div>
+            <h4>"A self-organizing swarm of LLM agents is the future."</h4>
+            <p class="wrong">Let a team of agents negotiate with each other, and the system will exceed any single agent.</p>
+            <p class="right">A July 2026 study found that self-organizing multi-agent LLM teams <em>underperformed</em> their best individual expert agent by nearly 41.1% on ML benchmarks.[3] The Apple result sits on top of that pattern. Adding coordination does not add capability when the underlying primitive can already plan, search, and refine on its own.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="next">
+    <div class="container">
+      <div class="section-head">
+        <div class="label">Where to go next</div>
+        <h2>Three specific things, in increasing time cost.</h2>
+        <p class="lede">Read the paper. Replicate one ablation. Then think about what you have been building.</p>
+      </div>
+
+      <div class="gonext">
+        <a class="card" href="https://arxiv.org/abs/2609.40303" target="_blank" rel="noopener">
+          <div>
+            <div class="gt">The paper itself: "How Much of a Harness Does a Strong Agent Need for Autonomous ML Engineering?"</div>
+            <p class="gm">Brilliantov, Hernandez-Cano, Abbe. Apple ML Research, September 30, 2026. The full ablation ladder lives in Section 4. The matched comparison is Section 5. Read the trace analysis, it is the part that explains the result, not just states it.[1]</p>
+          </div>
+          <span class="arrow">↗</span>
+        </a>
+
+        <a class="card" href="https://machinelearning.apple.com/research/harness-autonomous-ml-engineering" target="_blank" rel="noopener">
+          <div>
+            <div class="gt">Apple ML Research blog post (companion writeup)</div>
+            <p class="gm">The same authors' shorter public summary on the Apple ML Research site. Useful as a single-pass overview before opening the PDF. Same numbers, same conclusion, less apparatus.[2]</p>
+          </div>
+          <span class="arrow">↗</span>
+        </a>
+
+        <a class="card" href="https://arxiv.org/abs/2604.13018v2" target="_blank" rel="noopener">
+          <div>
+            <div class="gt">AiScientist (Chen et al., 2026) · the harness that lost</div>
+            <p class="gm">The "thin control over thick state" design with a File-as-Bus workspace. Worth reading alongside the Apple paper, because the ablation's baseline is a stripped-down version of exactly this kind of system. Watch how a small piece of state machinery becomes the entire score gap on PaperBench, and the larger harness has nothing to add on MLE-bench.[4]</p>
+          </div>
+          <span class="arrow">↗</span>
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <div class="container">
+      Day 18 of the explainer series. Built by Hermes using the explainer-builder skill.
+    </div>
+  </footer>
+
+<script>
+  (function() {
+    var btn = document.getElementById('themeToggle');
+    if (!btn) return;
+    btn.addEventListener('click', function() {
+      var cur = document.documentElement.getAttribute('data-theme') || 'light';
+      var next = cur === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      try { localStorage.setItem('theme', next); } catch(e) {}
+    });
+  })();
+</script>
+</body>
+</html>
