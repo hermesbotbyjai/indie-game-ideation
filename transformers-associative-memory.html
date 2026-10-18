@@ -1,0 +1,754 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Transformers as Associative Memory</title>
+<meta name="description" content="Every transformer layer is a memory store. Capacity ladders from d_k to 2*d_k to d_k^2 as you swap Hebbian accumulation for optimal linear least squares, then an MLP, then softmax attention.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script>
+  (function(){
+    try{
+      var t = localStorage.getItem('theme');
+      if(!t){ t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'; }
+      document.documentElement.setAttribute('data-theme', t);
+    }catch(e){}
+  })();
+</script>
+<style>
+  :root{
+    --bg: #ffffff;
+    --bg-soft: rgba(13,13,13,0.03);
+    --bg-card: #ffffff;
+    --bg-code: rgba(13,13,13,0.05);
+    --fg: #0d0d0d;
+    --fg-soft: rgba(13,13,13,0.72);
+    --fg-mute: rgba(13,13,13,0.50);
+    --border: rgba(13,13,13,0.08);
+    --border-strong: rgba(13,13,13,0.14);
+    --accent: #18E299;
+    --accent-soft: rgba(24,226,153,0.12);
+    --accent-fg: #0d0d0d;
+    --warn: #d97706;
+    --danger: #dc2626;
+    --shadow: 0 1px 0 rgba(13,13,13,0.04), 0 12px 32px rgba(13,13,13,0.06);
+    --radius: 12px;
+    --radius-lg: 20px;
+  }
+  [data-theme="dark"]{
+    --bg: #0a0a0a;
+    --bg-soft: rgba(255,255,255,0.04);
+    --bg-card: #121212;
+    --bg-code: rgba(255,255,255,0.06);
+    --fg: #f5f5f5;
+    --fg-soft: rgba(255,255,255,0.78);
+    --fg-mute: rgba(255,255,255,0.52);
+    --border: rgba(255,255,255,0.08);
+    --border-strong: rgba(255,255,255,0.14);
+    --accent: #2af5a8;
+    --accent-soft: rgba(42,245,168,0.14);
+    --accent-fg: #0a0a0a;
+    --shadow: 0 1px 0 rgba(255,255,255,0.04), 0 12px 32px rgba(0,0,0,0.5);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--fg);font-family:'Inter',system-ui,sans-serif;font-size:17px;line-height:1.55;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+  body{min-height:100vh;overflow-x:hidden}
+  code,pre,kbd,.mono{font-family:'JetBrains Mono','Geist Mono',ui-monospace,monospace}
+  a{color:var(--accent);text-decoration:none;border-bottom:1px solid transparent;transition:border-color .15s ease}
+  a:hover{border-bottom-color:var(--accent)}
+  .wrap{max-width:1200px;margin:0 auto;padding:0 24px}
+  nav.top{position:sticky;top:0;z-index:50;backdrop-filter:saturate(180%) blur(20px);background:rgba(255,255,255,0.78);border-bottom:1px solid var(--border)}
+  [data-theme="dark"] nav.top{background:rgba(10,10,10,0.78)}
+  nav.top .row{display:flex;align-items:center;justify-content:space-between;height:60px;gap:16px}
+  nav.top .brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:15px;letter-spacing:-0.01em}
+  nav.top .brand .dot{width:10px;height:10px;border-radius:9999px;background:var(--accent);box-shadow:0 0 0 4px var(--accent-soft)}
+  nav.top .nav-links{display:flex;gap:6px;align-items:center}
+  nav.top .nav-links a{color:var(--fg-soft);font-size:14px;font-weight:500;padding:6px 10px;border-radius:8px;border:none}
+  nav.top .nav-links a:hover{background:var(--bg-soft);color:var(--fg)}
+  nav.top .nav-links .toggle{appearance:none;background:transparent;border:1px solid var(--border);color:var(--fg-soft);width:34px;height:34px;border-radius:9999px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;transition:all .15s ease}
+  nav.top .nav-links .toggle:hover{border-color:var(--accent);color:var(--accent)}
+  nav.top .nav-links .toggle svg{width:16px;height:16px}
+
+  /* HERO */
+  .hero{position:relative;padding:96px 0 64px;overflow:hidden}
+  .hero::before{content:"";position:absolute;inset:0;background:radial-gradient(800px circle at 20% 10%, var(--accent-soft), transparent 60%), radial-gradient(600px circle at 90% 30%, rgba(24,226,153,0.06), transparent 50%);pointer-events:none}
+  .hero .label{display:inline-flex;align-items:center;gap:8px;font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:0.14em;text-transform:uppercase;color:var(--fg-soft);background:var(--bg-soft);border:1px solid var(--border);padding:6px 12px;border-radius:9999px;margin-bottom:24px}
+  .hero .label .pulse{width:6px;height:6px;border-radius:9999px;background:var(--accent);animation:pulse 1.8s ease-in-out infinite}
+  @keyframes pulse{0%,100%{opacity:.3;transform:scale(.9)}50%{opacity:1;transform:scale(1.2)}}
+  .hero h1{font-size:clamp(40px,6vw,64px);font-weight:800;letter-spacing:-0.025em;line-height:1.05;margin:0 0 20px;max-width:14ch}
+  .hero h1 .accent{color:var(--accent)}
+  .hero .tagline{font-size:clamp(18px,2.2vw,22px);color:var(--fg-soft);max-width:62ch;line-height:1.45;margin:0 0 36px}
+  .hero .what-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;max-width:920px;margin-top:8px}
+  .hero .what{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px;font-size:14.5px;color:var(--fg-soft);display:flex;align-items:flex-start;gap:10px}
+  .hero .what .check{flex-shrink:0;width:18px;height:18px;border-radius:9999px;background:var(--accent-soft);display:inline-flex;align-items:center;justify-content:center;margin-top:2px}
+  .hero .what .check svg{width:10px;height:10px;stroke:var(--accent)}
+
+  /* SECTION SHELL */
+  section{padding:80px 0;border-top:1px solid var(--border)}
+  section:first-of-type{border-top:none}
+  .sec-label{display:inline-block;font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:0.16em;text-transform:uppercase;color:var(--fg-mute);margin-bottom:14px}
+  h2{font-size:clamp(28px,4vw,40px);font-weight:700;letter-spacing:-0.02em;line-height:1.1;margin:0 0 18px;max-width:22ch}
+  h2 .accent{color:var(--accent)}
+  h3{font-size:clamp(20px,2.4vw,24px);font-weight:600;letter-spacing:-0.01em;margin:0 0 12px}
+  p{margin:0 0 16px;color:var(--fg-soft);max-width:72ch;font-size:16.5px;line-height:1.6}
+  p:last-child{margin-bottom:0}
+  p.lead{font-size:18.5px;color:var(--fg);line-height:1.5}
+  code.inline{font-family:'JetBrains Mono',monospace;font-size:0.9em;background:var(--bg-code);padding:2px 7px;border-radius:6px;color:var(--fg);border:1px solid var(--border)}
+  .math{font-family:'JetBrains Mono',monospace;font-size:0.95em;color:var(--fg);background:var(--bg-code);padding:3px 9px;border-radius:7px;border:1px solid var(--border);white-space:nowrap;display:inline-block}
+  .callout{margin:32px 0;padding:22px 26px;border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:var(--radius);background:var(--bg-soft)}
+  .callout .label{font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:0.14em;text-transform:uppercase;color:var(--accent);margin-bottom:8px;display:block}
+  .callout p{margin:0;font-size:17px;color:var(--fg);line-height:1.5}
+  .two-col{display:grid;grid-template-columns:1.2fr 1fr;gap:40px;align-items:start;margin-top:32px}
+  @media (max-width:840px){.two-col{grid-template-columns:1fr;gap:24px}}
+  .diagram{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius-lg);padding:24px;box-shadow:var(--shadow);overflow:hidden}
+  .diagram svg{display:block;max-width:100%;height:auto}
+  .diagram .caption{margin-top:14px;font-size:13.5px;color:var(--fg-mute);line-height:1.5}
+  .why{margin-top:24px;padding:18px 22px;border:1px dashed var(--border-strong);border-radius:var(--radius);background:var(--bg-soft)}
+  .why .label{display:block;font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:0.14em;text-transform:uppercase;color:var(--fg-mute);margin-bottom:8px}
+  .why p{font-size:15px;color:var(--fg-soft);margin:0;line-height:1.5}
+
+  /* capacity ladder */
+  .ladder{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:24px}
+  @media (max-width:780px){.ladder{grid-template-columns:1fr 1fr}}
+  .step{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:14px;position:relative;transition:transform .2s ease, border-color .2s ease}
+  .step:hover{transform:translateY(-2px);border-color:var(--accent)}
+  .step .num{font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--fg-mute);letter-spacing:0.1em}
+  .step .name{font-weight:600;font-size:14.5px;margin-top:4px;color:var(--fg)}
+  .step .cap{font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--accent);margin-top:6px}
+  .step .gain{font-size:12px;color:var(--fg-mute);margin-top:2px}
+
+  /* confusion cards */
+  .conf-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:18px;margin-top:32px}
+  .conf-card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:22px;transition:border-color .2s ease}
+  .conf-card:hover{border-color:var(--accent)}
+  .conf-card .num{font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:0.14em;color:var(--accent);text-transform:uppercase}
+  .conf-card h4{font-size:17px;font-weight:600;margin:8px 0 10px;letter-spacing:-0.01em}
+  .conf-card .wrong{font-size:14px;color:var(--danger);background:rgba(220,38,38,0.06);border:1px solid rgba(220,38,38,0.18);border-radius:8px;padding:8px 12px;margin-bottom:10px}
+  .conf-card .right{font-size:14px;color:var(--fg);background:var(--accent-soft);border:1px solid var(--accent);border-radius:8px;padding:8px 12px}
+
+  /* where-to-go-next */
+  .next{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;margin-top:24px}
+  .next a.tile{display:block;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:18px 20px;color:var(--fg);text-decoration:none;transition:all .15s ease;border-bottom:1px solid var(--border)}
+  .next a.tile:hover{border-color:var(--accent);transform:translateY(-2px)}
+  .next a.tile .tag{font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:0.14em;color:var(--accent);text-transform:uppercase}
+  .next a.tile .name{display:block;font-weight:600;font-size:16px;margin:6px 0 4px;letter-spacing:-0.01em}
+  .next a.tile .desc{font-size:13.5px;color:var(--fg-soft);line-height:1.45}
+
+  footer{padding:60px 0 80px;border-top:1px solid var(--border);color:var(--fg-mute);font-size:13.5px}
+  footer .meta-row{display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap}
+  footer .meta-row .l{font-family:'JetBrains Mono',monospace;letter-spacing:0.06em}
+
+  /* DIAGRAM-LEVEL ANIMATIONS */
+  @keyframes drawIn{from{stroke-dashoffset:600}to{stroke-dashoffset:0}}
+  @keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+  @keyframes growBar{from{transform:scaleY(0)}to{transform:scaleY(1)}}
+  @keyframes blink{0%,100%{opacity:1}50%{opacity:.35}}
+  @keyframes slideRight{from{transform:translateX(-12px);opacity:0}to{transform:none;opacity:1}}
+  @keyframes slideUp{from{transform:translateY(10px);opacity:0}to{transform:none;opacity:1}}
+  @keyframes rotateDisc{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+  @keyframes scaleIn{from{transform:scale(.92);opacity:0}to{transform:none;opacity:1}}
+
+  .bar{fill:var(--accent);transform-origin:bottom center;animation:growBar .8s cubic-bezier(.2,.7,.2,1) both}
+  .bar.delayed{animation-delay:.15s}
+  .bar.delayed2{animation-delay:.3s}
+  .bar.delayed3{animation-delay:.45s}
+  .bar.delayed4{animation-delay:.6s}
+  .bar.target{fill:var(--danger);stroke:var(--danger);stroke-width:1.2}
+  .bar.other{fill:var(--fg-mute);opacity:.55}
+  .node-label{font-family:'JetBrains Mono',monospace;font-size:11px;fill:var(--fg-soft);animation:fadeIn .6s ease both}
+  .node-label.bold{fill:var(--fg);font-weight:600;font-size:12px}
+  .node-label.accent{fill:var(--accent);font-weight:600}
+  .axis-line{stroke:var(--border-strong);stroke-width:1;animation:drawIn 1.2s ease both}
+  .grid-line{stroke:var(--border);stroke-width:.5}
+  .diagram-title{font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:0.14em;text-transform:uppercase;fill:var(--fg-mute);animation:fadeIn .4s ease both}
+
+  .step-arrow{stroke:var(--accent);stroke-width:2;fill:none;stroke-linecap:round;stroke-linejoin:round}
+  .pulse-ring{fill:none;stroke:var(--accent);stroke-width:1.5;opacity:.6;animation:blink 2s ease-in-out infinite}
+
+  @media (prefers-reduced-motion: reduce){
+    *,*::before,*::after{animation-duration:.01ms !important;animation-iteration-count:1 !important;transition-duration:.01ms !important}
+    .bar{transform:none}
+  }
+</style>
+</head>
+<body>
+
+<nav class="top">
+  <div class="wrap row">
+    <div class="brand">
+      <span class="dot" aria-hidden="true"></span>
+      <span>Hermes Explainer</span>
+    </div>
+    <div class="nav-links">
+      <a href="#hero">Top</a>
+      <a href="#model">Model</a>
+      <a href="#walkthrough">Walkthrough</a>
+      <a href="#confusions">Confusions</a>
+      <a href="#next">Next</a>
+      <button class="toggle" id="themeToggle" aria-label="Toggle theme">
+        <svg id="iconLight" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:none"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
+        <svg id="iconDark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+      </button>
+    </div>
+  </div>
+</nav>
+
+<!-- HERO -->
+<header class="hero" id="hero">
+  <div class="wrap">
+    <span class="label"><span class="pulse"></span>Day 22 of the daily explainer series</span>
+    <h1>Transformers are <span class="accent">memory stores</span> in disguise.</h1>
+    <p class="tagline">A linear layer holds about as many facts as its key dimension. An MLP holds tens of times that. Softmax attention holds over a million. The whole transformer architecture is an answer to a single question: how do you pack more memories into the same number of weights without drowning recall in interference?</p>
+
+    <div class="what-grid">
+      <div class="what"><span class="check"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></span><span>Why the outer-product rule can store about <span class="math">d<sub>k</sub></span> memories before recall breaks</span></div>
+      <div class="what"><span class="check"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></span><span>Why whitening the keys doubles the capacity of a linear store</span></div>
+      <div class="what"><span class="check"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></span><span>How a ReLU and a softmax are both recall sharpeners, just different ones</span></div>
+      <div class="what"><span class="check"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></span><span>What it means that softmax attention is a nonparametric memory store</span></div>
+    </div>
+  </div>
+</header>
+
+<!-- ONE-SENTENCE MODEL -->
+<section id="model">
+  <div class="wrap">
+    <span class="sec-label">The model in one sentence</span>
+    <h2>The whole transformer is a sequence of <span class="accent">memory stores</span>, each one trading write cost and parameter count for more facts of the past it can recall cleanly.</h2>
+    <div class="callout">
+      <span class="label">Read it once</span>
+      <p>Every block writes a bank of key-value pairs into its weights or activations, then at query time returns a weighted sum of values where the weights are key-query similarities. Hebbian outer products, ridge regression, an MLP, and softmax attention are all answers to the same capacity problem, with each next one suppressing interference more aggressively than the last.</p>
+    </div>
+  </div>
+</section>
+
+<!-- MENTAL MODEL DIAGRAM -->
+<section id="diagram">
+  <div class="wrap">
+    <span class="sec-label">The mental model</span>
+    <h2>Four memory stores. One capacity ladder. <span class="accent">The same recall equation.</span></h2>
+    <p>Every store below answers <span class="math">f(x) = &sum;<sub>i</sub> v<sub>i</sub> &middot; &sigma;(k<sub>i</sub>&sup2; &middot; x)</span>. What changes is <em>how</em> the memories are written (the matrix construction) and <em>which</em> nonlinearity <span class="inline">&sigma;</span> is used. The capacity numbers below come from running each store with <span class="inline">d<sub>k</sub> = 64</span> unit keys and counting when interference meets signal.</p>
+
+    <div class="ladder">
+      <div class="step">
+        <div class="num">01</div>
+        <div class="name">Hebbian outer product</div>
+        <div class="cap">M ≈ d<sub>k</sub></div>
+        <div class="gain">~64 memories at d=64</div>
+      </div>
+      <div class="step">
+        <div class="num">02</div>
+        <div class="name">Optimal linear (whitened)</div>
+        <div class="cap">M ≈ 2·d<sub>k</sub></div>
+        <div class="gain">~128 memories, zero interference below</div>
+      </div>
+      <div class="step">
+        <div class="num">03</div>
+        <div class="name">MLP (ReLU²)</div>
+        <div class="cap">M ∝ d<sub>k</sub>²/ln d</div>
+        <div class="gain">~2,700 memories at d=64</div>
+      </div>
+      <div class="step">
+        <div class="num">04</div>
+        <div class="name">Softmax attention</div>
+        <div class="cap">M ∝ d<sub>k</sub>²/ln d</div>
+        <div class="gain">over a million memories</div>
+      </div>
+    </div>
+
+    <div class="diagram" style="margin-top:36px">
+      <svg viewBox="0 0 880 420" role="img" aria-label="Capacity ladder for four associative memory stores">
+        <style>
+          .store-name{font-family:'JetBrains Mono',monospace;font-size:12px;fill:var(--fg);font-weight:600}
+          .store-cap{font-size:11px;fill:var(--fg-soft)}
+          .store-x{font-size:10px;fill:var(--fg-mute)}
+          .grad-ax{stroke:var(--border-strong);stroke-width:1.5;stroke-linecap:round}
+          .grad-tick{stroke:var(--border-strong);stroke-width:1}
+          .grad-label{font-family:'JetBrains Mono',monospace;font-size:10px;fill:var(--fg-mute)}
+        </style>
+        <text class="diagram-title" x="20" y="22">log capacity vs. store type  ·  d_k = 64</text>
+
+        <!-- axis -->
+        <line class="grad-ax" x1="80" y1="380" x2="850" y2="380"/>
+        <line class="grad-ax" x1="80" y1="380" x2="80" y2="40"/>
+
+        <!-- y ticks: log2 scale from 64 to 1M -->
+        <g class="grid-line">
+          <line x1="80" y1="340" x2="850" y2="340"/>
+          <line x1="80" y1="280" x2="850" y2="280"/>
+          <line x1="80" y1="200" x2="850" y2="200"/>
+          <line x1="80" y1="120" x2="850" y2="120"/>
+          <line x1="80" y1="60" x2="850" y2="60"/>
+        </g>
+        <text class="grad-label" x="40" y="344" text-anchor="end">10²</text>
+        <text class="grad-label" x="40" y="284" text-anchor="end">10³</text>
+        <text class="grad-label" x="40" y="204" text-anchor="end">10⁴</text>
+        <text class="grad-label" x="40" y="124" text-anchor="end">10⁵</text>
+        <text class="grad-label" x="40" y="64" text-anchor="end">10⁶</text>
+
+        <!-- x labels -->
+        <text class="grad-label" x="160" y="398" text-anchor="middle">outer product</text>
+        <text class="grad-label" x="335" y="395" text-anchor="middle">optimal linear</text>
+        <text class="grad-label" x="510" y="395" text-anchor="middle">MLP (ReLU²)</text>
+        <text class="grad-label" x="685" y="395" text-anchor="middle">softmax attn</text>
+        <text class="grad-label" x="860" y="395" text-anchor="middle">soft attn (d=128)</text>
+
+        <!-- capacity markers (bars) -->
+        <!-- y(log10 M): 10^2=300, 10^3=240, 10^4=160, 10^5=80, 10^6=20 ; range 340..60 = 280 over 4 decades -->
+
+        <!-- 1: Hebbian: log10(64) = 1.806 -> y = 340 - 180.6 = 159.4 -->
+        <g>
+          <line x1="135" y1="159.4" x2="185" y2="159.4" stroke="var(--accent)" stroke-width="3" stroke-linecap="round" style="animation:scaleIn .6s ease both">
+            <animate attributeName="x2" from="135" to="185" dur="0.5s" begin="0s" fill="freeze"/>
+          </line>
+          <circle cx="160" cy="159.4" r="5" fill="var(--accent)" style="animation:scaleIn .6s ease both">
+            <animate attributeName="r" from="0" to="5" dur="0.4s" begin="0.3s" fill="freeze"/>
+          </circle>
+          <text class="store-cap" x="160" y="148" text-anchor="middle" style="animation:fadeIn .5s ease both .4s, both">64</text>
+        </g>
+
+        <!-- 2: Optimal: log10(128) = 2.107 -> y = 340 - 210.7 = 129.3 -->
+        <g>
+          <line x1="310" y1="129.3" x2="360" y2="129.3" stroke="var(--accent)" stroke-width="3" stroke-linecap="round" style="animation:scaleIn .6s ease both .2s">
+            <animate attributeName="x2" from="310" to="360" dur="0.5s" begin="0.2s" fill="freeze"/>
+          </line>
+          <circle cx="335" cy="129.3" r="5" fill="var(--accent)" style="animation:scaleIn .6s ease both .2s">
+            <animate attributeName="r" from="0" to="5" dur="0.4s" begin="0.5s" fill="freeze"/>
+          </circle>
+          <text class="store-cap" x="335" y="118" text-anchor="middle" style="animation:fadeIn .5s ease both .6s, both">128</text>
+        </g>
+
+        <!-- 3: MLP ReLU^2 -->
+        <g>
+          <line x1="485" y1="92" x2="535" y2="92" stroke="var(--accent)" stroke-width="3" stroke-linecap="round" style="animation:scaleIn .6s ease both .4s">
+            <animate attributeName="x2" from="485" to="535" dur="0.5s" begin="0.4s" fill="freeze"/>
+          </line>
+          <circle cx="510" cy="92" r="5" fill="var(--accent)" style="animation:scaleIn .6s ease both .4s">
+            <animate attributeName="r" from="0" to="5" dur="0.4s" begin="0.7s" fill="freeze"/>
+          </circle>
+          <text class="store-cap" x="510" y="80" text-anchor="middle" style="animation:fadeIn .5s ease both .8s, both">2,700</text>
+        </g>
+
+        <!-- 4: Softmax attention at d=64 -->
+        <g>
+          <line x1="660" y1="48" x2="710" y2="48" stroke="var(--accent)" stroke-width="3" stroke-linecap="round" style="animation:scaleIn .6s ease both .6s">
+            <animate attributeName="x2" from="660" to="710" dur="0.5s" begin="0.6s" fill="freeze"/>
+          </line>
+          <circle cx="685" cy="48" r="6" fill="var(--accent)" style="animation:scaleIn .6s ease both .6s">
+            <animate attributeName="r" from="0" to="6" dur="0.4s" begin="0.9s" fill="freeze"/>
+          </circle>
+          <circle cx="685" cy="48" r="10" fill="none" stroke="var(--accent)" stroke-width="1.5" opacity="0.5" class="pulse-ring">
+            <animate attributeName="r" from="6" to="14" dur="1.6s" begin="1.3s" repeatCount="indefinite"/>
+            <animate attributeName="opacity" from="0.7" to="0" dur="1.6s" begin="1.3s" repeatCount="indefinite"/>
+          </circle>
+          <text class="store-cap" x="685" y="36" text-anchor="middle" style="animation:fadeIn .5s ease both 1s, both">&gt; 10⁶</text>
+        </g>
+
+        <!-- 5: Softmax at d=128 -->
+        <g>
+          <line x1="835" y1="20" x2="855" y2="20" stroke="var(--accent)" stroke-width="3" stroke-linecap="round" style="animation:scaleIn .6s ease both .8s">
+            <animate attributeName="x2" from="835" to="855" dur="0.5s" begin="0.8s" fill="freeze"/>
+          </line>
+          <circle cx="845" cy="20" r="5" fill="var(--accent)" style="animation:scaleIn .6s ease both .8s">
+            <animate attributeName="r" from="0" to="5" dur="0.4s" begin="1.1s" fill="freeze"/>
+          </circle>
+          <text class="store-cap" x="845" y="14" text-anchor="middle" style="animation:fadeIn .5s ease both 1.2s, both">≫ 10⁶</text>
+        </g>
+
+        <!-- arrows connecting the ladder steps -->
+        <g stroke="var(--accent)" stroke-width="1" stroke-dasharray="3 3" fill="none" opacity="0.35">
+          <path d="M 168 156 Q 250 145 332 128" />
+          <path d="M 343 125 Q 420 110 506 90" />
+          <path d="M 518 88 Q 600 70 681 50" />
+          <path d="M 693 46 Q 770 35 840 22" />
+        </g>
+
+        <!-- footnote -->
+        <text class="store-x" x="20" y="412">y: capacity (memories per layer)</text>
+      </svg>
+      <p class="caption">Source: interference-to-signal numerics from Alex Wang's 2026 essay[1]. The softmax attention number is the modern Hopfield-style bound: capacity grows like <span class="inline">exp(c·d<sub>k</sub>)</span> for fully-sharpened attention[2].</p>
+    </div>
+  </div>
+</section>
+
+<!-- WALKTHROUGH -->
+<section id="walkthrough">
+  <div class="wrap">
+    <span class="sec-label">The walkthrough</span>
+    <h2>From a <span class="accent">matrix of correlations</span> to a <span class="accent">nonparametric recall table.</span></h2>
+
+    <!-- 1. The outer product store -->
+    <div class="two-col">
+      <div>
+        <h3>1. Hebbian outer product: storing is the easy part.</h3>
+        <p>The simplest associative memory writes a memory by adding an outer product to a weight matrix. For a key-value pair <span class="inline">(k<sub>i</sub>, v<sub>i</sub>)</span>, the rule is <span class="math">W &larr; W + v<sub>i</sub>k<sub>i</sub>&sup2;</span>. To recall, you query with <span class="inline">x</span> and read out <span class="math">f(x) = Wx = &sum;<sub>i</sub> v<sub>i</sub>(k<sub>i</sub>&sup2;x)</span>. This is the same update rule a gradient step takes, and the same state that linear attention uses for its recurrence. Memory writes and model updates are the same operation.[1]</p>
+        <p>The catch: every key you store adds interference to every recall. For random unit keys in <span class="inline">d<sub>k</sub></span> dimensions, the interference-to-signal ratio climbs like <span class="math">√(M/d<sub>k</sub>)</span>. Cross 1, and recall fails. That happens at <span class="inline">M ≈ d<sub>k</sub></span>, sixty-four memories at the dimension we are working with.[1]</p>
+        <div class="why"><span class="label">Why this matters</span><p>Hebbian storage is what makes fast weights, linear attention, and Modern Hopfield networks feel like the same idea. They differ in when and where the outer products are added, not in the math of the write. They all share the same ceiling on capacity.</p></div>
+      </div>
+      <div class="diagram">
+        <svg viewBox="0 0 420 280" role="img" aria-label="Outer product memory store: bars showing target signal and growing interference">
+          <text class="diagram-title" x="20" y="22">outer-product store  ·  M = 64 memories</text>
+          <line class="axis-line" x1="40" y1="240" x2="400" y2="240"/>
+          <line class="axis-line" x1="40" y1="240" x2="40" y2="40"/>
+
+          <text class="grad-label" x="38" y="80" text-anchor="end">weight</text>
+          <text class="grad-label" x="38" y="245" text-anchor="end">0</text>
+
+          <!-- target memory bar -->
+          <rect class="bar target" x="50" y="120" width="22" height="120"/>
+          <text class="node-label" x="61" y="112" text-anchor="middle">v_j</text>
+
+          <!-- 63 other bars: 22 wide each, gaps. show a sample -->
+          <rect class="bar other" x="80" y="222" width="6" height="18"/>
+          <rect class="bar other" x="92" y="210" width="6" height="30"/>
+          <rect class="bar other" x="104" y="225" width="6" height="15"/>
+          <rect class="bar other" x="116" y="216" width="6" height="24"/>
+          <rect class="bar other" x="128" y="220" width="6" height="20"/>
+          <rect class="bar other" x="140" y="200" width="6" height="40"/>
+          <rect class="bar other" x="152" y="230" width="6" height="10"/>
+          <rect class="bar other" x="164" y="214" width="6" height="26"/>
+          <rect class="bar other" x="176" y="206" width="6" height="34"/>
+          <rect class="bar other" x="188" y="222" width="6" height="18"/>
+          <rect class="bar other" x="200" y="218" width="6" height="22"/>
+          <rect class="bar other" x="212" y="232" width="6" height="8"/>
+          <rect class="bar other" x="224" y="212" width="6" height="28"/>
+          <rect class="bar other" x="236" y="226" width="6" height="14"/>
+          <rect class="bar other" x="248" y="216" width="6" height="24"/>
+          <rect class="bar other" x="260" y="222" width="6" height="18"/>
+          <rect class="bar other" x="272" y="208" width="6" height="32"/>
+          <rect class="bar other" x="284" y="234" width="6" height="6"/>
+          <rect class="bar other" x="296" y="218" width="6" height="22"/>
+          <rect class="bar other" x="308" y="226" width="6" height="14"/>
+          <rect class="bar other" x="320" y="220" width="6" height="20"/>
+          <rect class="bar other" x="332" y="230" width="6" height="10"/>
+          <rect class="bar other" x="344" y="212" width="6" height="28"/>
+          <rect class="bar other" x="356" y="216" width="6" height="24"/>
+          <rect class="bar other" x="368" y="220" width="6" height="20"/>
+          <rect class="bar other" x="380" y="232" width="6" height="8"/>
+
+          <!-- interference envelope -->
+          <path d="M 80 198 L 386 198" stroke="var(--danger)" stroke-width="1.5" stroke-dasharray="4 3" fill="none" opacity="0.7"/>
+          <text class="node-label accent" x="395" y="201" text-anchor="end">interference</text>
+
+          <text class="node-label" x="61" y="262" text-anchor="middle">target</text>
+          <text class="node-label" x="240" y="262" text-anchor="middle">other 63 memories</text>
+        </svg>
+        <p class="caption">Red bar is the recall for the stored key. Grey bars are interference contributions from every other stored memory. Together, they sum to the recalled vector; once the envelope of interference meets the signal, recall fails.</p>
+      </div>
+    </div>
+
+    <!-- 2. whitening -->
+    <div class="two-col" style="margin-top:80px">
+      <div class="diagram">
+        <svg viewBox="0 0 420 280" role="img" aria-label="Whitening removes key covariance">
+          <text class="diagram-title" x="20" y="22">before whitening vs. after</text>
+
+          <!-- before: anisotropic cloud -->
+          <text class="node-label" x="110" y="56" text-anchor="middle">raw keys K</text>
+          <g transform="translate(110 160)">
+            <ellipse cx="0" cy="0" rx="76" ry="22" fill="none" stroke="var(--fg-mute)" stroke-width="1" stroke-dasharray="3 2" opacity="0.5"/>
+            <circle cx="-60" cy="-2" r="3.5" style="fill:var(--fg)"/>
+            <circle cx="-44" cy="6" r="3.5" style="fill:var(--fg)"/>
+            <circle cx="-28" cy="-8" r="3.5" style="fill:var(--fg)"/>
+            <circle cx="-10" cy="4" r="3.5" style="fill:var(--fg)"/>
+            <circle cx="14" cy="-4" r="3.5" style="fill:var(--accent)"/>
+            <circle cx="34" cy="10" r="3.5" style="fill:var(--fg)"/>
+            <circle cx="50" cy="-6" r="3.5" style="fill:var(--fg)"/>
+            <text class="node-label accent" x="14" y="-12" text-anchor="middle">q</text>
+          </g>
+
+          <!-- arrow -->
+          <g class="step-arrow" style="animation:slideRight .6s ease both .4s">
+            <path d="M 192 160 L 232 160" />
+            <polyline points="226 154 232 160 226 166"/>
+          </g>
+          <text class="node-label" x="212" y="146" text-anchor="middle">(K⊤K)⁻¹</text>
+
+          <!-- after: isotropic -->
+          <text class="node-label" x="320" y="56" text-anchor="middle">whitened keys</text>
+          <g transform="translate(320 160)">
+            <circle cx="0" cy="0" r="64" fill="none" stroke="var(--fg-mute)" stroke-width="1" stroke-dasharray="3 2" opacity="0.5"/>
+            <circle cx="-44" cy="-22" r="3.5" style="fill:var(--fg)"/>
+            <circle cx="-12" cy="-36" r="3.5" style="fill:var(--fg)"/>
+            <circle cx="22" cy="-30" r="3.5" style="fill:var(--fg)"/>
+            <circle cx="42" cy="-4" r="3.5" style="fill:var(--fg)"/>
+            <circle cx="32" cy="26" r="3.5" style="fill:var(--fg)"/>
+            <circle cx="-2" cy="38" r="3.5" style="fill:var(--fg)"/>
+            <circle cx="-34" cy="22" r="3.5" style="fill:var(--fg)"/>
+            <circle cx="-48" cy="0" r="3.5" style="fill:var(--accent)"/>
+            <text class="node-label accent" x="-48" y="-12" text-anchor="middle">q</text>
+          </g>
+
+          <!-- bottom captions -->
+          <text class="node-label" x="110" y="252" text-anchor="middle">keys share directions</text>
+          <text class="node-label" x="110" y="266" text-anchor="middle">→ correlated recall</text>
+
+          <text class="node-label" x="320" y="252" text-anchor="middle">keys decorrelated</text>
+          <text class="node-label" x="320" y="266" text-anchor="middle">→ recall is fair</text>
+        </svg>
+        <p class="caption">Raw keys cluster along a few shared directions, so a query that matches one cluster over-weights many similar memories. The pseudoinverse <span class="inline">(K⊤K)⁻¹</span> strips that covariance so each stored memory gets a fair voice in recall.</p>
+      </div>
+      <div>
+        <h3>2. Whitening the keys doubles your capacity.</h3>
+        <p>The Hebbian store writes each memory without looking at the others. The optimal linear store solves for <span class="inline">W</span> as a least-squares fit over every stored key-value pair at once. The closed form is <span class="math">W = V&sup2;K(K&sup2;K)⁻&sup1;</span>. The extra factor <span class="inline">(K&sup2;K)⁻&sup1;</span> whitens the keys: it cancels the directions that many keys share, the directions that create correlated interference during recall.[1]</p>
+        <p>Up to <span class="inline">M = d<sub>k</sub></span>, the optimal store has <em>zero</em> interference. It then climbs like the Hebbian store but with a <span class="math">−1</span> subtracted under the square root: <span class="math">‖interference‖/‖signal‖ ≈ √(M/(d<sub>k</sub>−1))</span>. That single correction is worth a factor of two in capacity, from <span class="inline">M ≈ 64</span> to <span class="inline">M ≈ 128</span>. Past that, the two stores converge.[1]</p>
+        <div class="why"><span class="label">Why this matters</span><p>Linear regression on keys is not just a math trick. It is what every "ridge regression" memory layer, every least-squares meta-learner, and every test-time regression paper is approximating. The whitened store is the linear ceiling; everything past it has to spend nonlinearity to break through.</p></div>
+      </div>
+    </div>
+
+    <!-- 3. MLP / nonlinearity -->
+    <div class="two-col" style="margin-top:80px">
+      <div>
+        <h3>3. A ReLU is a recall sharpener, not just a squiggle.</h3>
+        <p>Linear stores cannot suppress low-similarity memories because their recall weights scale small and large similarities by the same factor. Insert a nonlinearity <span class="inline">&sigma;</span> and you get <span class="math">f(x) = V&sup2;&sigma;(Kx)</span>. A ReLU zeroes negative ones; a ReLU squared pushes positive ones up; a softmax turns the largest similarity into the only thing that matters.[1]</p>
+        <p>The ReLU effect is the easiest to quantify. For random keys, a similarity is equally often positive or negative, so ReLU zeroes about half the recall weights. Halving the variance of the weights shrinks the interference by <span class="inline">√2</span>.[5] Stack two ReLUs in sequence (the standard MLP nonlinearity is <span class="inline">ReLU²</span>) and the capacity gain compounds. At <span class="inline">d<sub>k</sub> = 64</span>, you go from <span class="inline">~128</span> memories for the optimal linear store to about <span class="inline">2,700</span> for the MLP. Twenty times the capacity, same parameter count.[1]</p>
+        <div class="why"><span class="label">Why this matters</span><p>This is the cleanest argument for why MLPs are not throwaway components in modern transformers. The MLP layers are doing memory work that attention alone cannot, because attention keys are limited to <span class="inline">d<sub>head</sub></span> per head. MLPs store the long tail of facts that no single attention head can hold cleanly.</p></div>
+      </div>
+      <div class="diagram">
+        <svg viewBox="0 0 420 280" role="img" aria-label="ReLU vs softmax sharpening of similarities">
+          <text class="diagram-title" x="20" y="22">recall weights  ·  similar keys sorted by q⊤k</text>
+
+          <!-- baseline -->
+          <line class="axis-line" x1="50" y1="240" x2="400" y2="240"/>
+          <line class="axis-line" x1="50" y1="240" x2="50" y2="40"/>
+
+          <!-- linear: gentle slope through zero -->
+          <path d="M 50 240 L 110 210 L 170 195 L 230 180 L 290 165 L 350 155 L 400 148"
+                stroke="var(--fg-mute)" stroke-width="2" fill="none">
+            <animate attributeName="stroke-dashoffset" from="700" to="0" dur="1s" begin="0.1s" fill="freeze"/>
+          </path>
+          <text class="node-label" x="395" y="148" text-anchor="end" style="animation:fadeIn .5s ease both .2s">linear</text>
+
+          <!-- ReLU: zero below, linear above -->
+          <path d="M 50 240 L 220 240 L 230 220 L 290 195 L 350 170 L 400 145"
+                stroke="var(--accent)" stroke-width="2.5" fill="none" style="animation:drawIn 1.2s ease both .3s;stroke-dasharray:400;stroke-dashoffset:0">
+            <animate attributeName="stroke-dashoffset" from="400" to="0" dur="1s" begin="0.3s" fill="freeze"/>
+          </path>
+          <text class="node-label accent" x="395" y="125" text-anchor="end" style="animation:fadeIn .5s ease both .8s">ReLU</text>
+
+          <!-- softmax: cliff -->
+          <path d="M 50 240 L 220 240 L 240 240 L 260 238 L 280 220 L 300 170 L 320 100 L 340 60 L 360 48 L 400 44"
+                stroke="var(--danger)" stroke-width="2.5" fill="none" style="animation:drawIn 1.4s ease both .6s">
+            <animate attributeName="stroke-dashoffset" from="500" to="0" dur="1.2s" begin="0.6s" fill="freeze"/>
+          </path>
+          <text class="node-label" x="395" y="48" text-anchor="end" style="animation:fadeIn .5s ease both 1.1s" fill="var(--danger)">softmax</text>
+
+          <!-- axis labels -->
+          <text class="grad-label" x="50" y="258" text-anchor="middle">low sim</text>
+          <text class="grad-label" x="400" y="258" text-anchor="middle">high sim</text>
+          <text class="grad-label" x="38" y="244" text-anchor="end">0</text>
+
+          <!-- annotations -->
+          <line x1="220" y1="40" x2="220" y2="240" stroke="var(--border-strong)" stroke-width="1" stroke-dasharray="2 2"/>
+          <text class="node-label" x="222" y="52" style="animation:fadeIn .5s ease both 1.4s">q⊤k = 0</text>
+        </svg>
+        <p class="caption">All three curves assign recall weights to the same set of keys, sorted by similarity to the query. Linear hands a non-zero weight to every key. ReLU zeroes the negatives. Softmax kills everything except the top few. Each step concentrates recall on a smaller, more reliable set of memories.</p>
+      </div>
+    </div>
+
+    <!-- 4. Softmax attention as nonparametric store -->
+    <div class="two-col" style="margin-top:80px">
+      <div class="diagram">
+        <svg viewBox="0 0 420 320" role="img" aria-label="Softmax attention as a nonparametric memory store over a context window">
+          <text class="diagram-title" x="20" y="22">softmax attention  ·  context is the memory</text>
+
+          <!-- query at left -->
+          <g transform="translate(40 90)">
+            <rect x="0" y="0" width="80" height="40" rx="8" style="fill:var(--accent-soft);stroke:var(--accent)"/>
+            <text class="node-label bold" x="40" y="24" text-anchor="middle">query q</text>
+          </g>
+
+          <!-- arrows to top 3 keys (sharp attention) -->
+          <line x1="125" y1="100" x2="240" y2="60" stroke="var(--accent)" stroke-width="3" stroke-linecap="round"/>
+          <line x1="125" y1="100" x2="240" y2="120" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" opacity="0.6"/>
+          <line x1="125" y1="100" x2="240" y2="180" stroke="var(--fg-mute)" stroke-width="1" stroke-linecap="round" opacity="0.3"/>
+          <line x1="125" y1="100" x2="240" y2="240" stroke="var(--fg-mute)" stroke-width="1" stroke-linecap="round" opacity="0.3"/>
+
+          <!-- context column on right -->
+          <g transform="translate(240 40)">
+            <rect x="0" y="0" width="160" height="40" rx="6" style="fill:var(--accent-soft);stroke:var(--accent)"/>
+            <text class="node-label bold" x="80" y="24" text-anchor="middle">k₁, v₁  (top)</text>
+
+            <rect x="0" y="60" width="160" height="40" rx="6" style="fill:var(--accent-soft);stroke:var(--accent);opacity:0.7"/>
+            <text class="node-label" x="80" y="84" text-anchor="middle">k₂, v₂</text>
+
+            <rect x="0" y="120" width="160" height="40" rx="6" style="fill:var(--bg-soft);stroke:var(--border-strong)"/>
+            <text class="node-label" x="80" y="144" text-anchor="middle" opacity="0.6">k₃, v₃</text>
+
+            <rect x="0" y="180" width="160" height="40" rx="6" style="fill:var(--bg-soft);stroke:var(--border-strong)"/>
+            <text class="node-label" x="80" y="204" text-anchor="middle" opacity="0.6">...</text>
+
+            <rect x="0" y="240" width="160" height="40" rx="6" style="fill:var(--bg-soft);stroke:var(--border-strong)"/>
+            <text class="node-label" x="80" y="264" text-anchor="middle" opacity="0.6">k_M, v_M</text>
+          </g>
+
+          <!-- readout arrow -->
+          <g>
+            <line x1="240" y1="20" x2="240" y2="20" stroke="var(--accent)" stroke-width="2"/>
+            <line x1="80" y1="148" x2="200" y2="148" stroke="var(--accent)" stroke-width="2" stroke-linecap="round"/>
+            <path d="M 200 148 L 195 144 M 200 148 L 195 152" stroke="var(--accent)" stroke-width="2" fill="none"/>
+            <text class="node-label accent" x="200" y="142" text-anchor="end" style="animation:fadeIn .5s ease both 1s">≈ v₁</text>
+          </g>
+
+          <!-- bottom labels -->
+          <text class="node-label" x="125" y="300" text-anchor="middle">keys are not in weights</text>
+          <text class="node-label" x="125" y="314" text-anchor="middle">they live in the activations</text>
+          <text class="node-label accent" x="320" y="298" text-anchor="middle">M = context length</text>
+          <text class="node-label accent" x="320" y="312" text-anchor="middle">capacity unbounded in tokens</text>
+        </svg>
+        <p class="caption">Attention does not store keys in <span class="inline">W</span>. It stores them in the activations of the current context window. The number of memories <span class="inline">M</span> is whatever the context length is. That is what "nonparametric" means: adding memories does not change the parameter count.</p>
+      </div>
+      <div>
+        <h3>4. Softmax attention is a nonparametric memory store.</h3>
+        <p>The first three stores write their memories into the weights. Softmax attention does not. Every token in the current context is a key-value pair in the activations, and the recall is just <span class="math">softmax(QK&sup2;) V</span>. Adding a memory to the store costs zero parameters; you just append a token. Adding a memory to a parametric store costs a row of weights.[1]</p>
+        <p>The capacity bound is different too. Modern Hopfield analysis shows that as the key dimension grows, the capacity of a sharpened softmax scales like <span class="inline">exp(c · d<sub>k</sub>)</span>, which blows past any polynomial bound a parametric store can hit.[2] At <span class="inline">d<sub>k</sub> = 64</span>, that puts soft-attention capacity comfortably past a million memories, and at <span class="inline">d<sub>k</sub> = 128</span> it is many orders of magnitude higher. The cost is the activation memory: every context token has to live in HBM during the forward pass.</p>
+        <div class="why"><span class="label">Why this matters</span><p>This is the architectural reason context windows matter and the architectural reason they are expensive. Each new token is another entry in the in-context associative memory, and every query touches all of them. Long-context inference is a long-context recall table, not a "longer thought". KV-cache compression, sparse attention, and sliding-window tricks are all attempts to make that table smaller without losing recall.</p></div>
+      </div>
+    </div>
+
+    <!-- 5. gradient step is a memory write -->
+    <div class="two-col" style="margin-top:80px">
+      <div>
+        <h3>5. A gradient step and an outer-product write are the same operation.</h3>
+        <p>For a linear layer <span class="inline">y = Wx</span> with scalar loss <span class="inline">L</span>, the gradient with respect to <span class="inline">W</span> is <span class="inline">∂L/∂W = (∂L/∂y) x&sup2;</span>. A gradient step with learning rate <span class="inline">&eta;</span> is <span class="math">W &larr; W &minus; &eta;(∂L/∂y) x&sup2;</span>. That is an outer-product memory write with key <span class="inline">x</span> and value <span class="inline">&minus;&eta;(∂L/∂y)</span>.[1]</p>
+        <p>Read this way, training is not "adjusting knobs to reduce loss". It is "iteratively writing a bank of associations into <span class="inline">W</span>, one training example at a time, where each example pairs an input with the desired response". Inference, the forward pass, then becomes a content-addressable lookup against that bank. Irie and colleagues made this exact argument formally and showed a linear layer is equivalent to attention over all its training inputs.[1]</p>
+        <div class="why"><span class="label">Why this matters</span><p>If a gradient step and an associative write are the same, then continual learning, fine-tuning, and in-context learning all become the same problem with different write schedules. The fast-weight line of research, all the way to modern Hopfield and Titans-style persistent memory, is doing the same algebra with different storage media.</p></div>
+      </div>
+      <div class="diagram">
+        <svg viewBox="0 0 420 240" role="img" aria-label="Gradient descent step as a memory write">
+          <text class="diagram-title" x="20" y="22">training step == memory write</text>
+
+          <!-- W box -->
+          <rect x="20" y="100" width="100" height="60" rx="10" style="fill:var(--bg-soft);stroke:var(--border-strong)"/>
+          <text class="node-label bold" x="70" y="125" text-anchor="middle">W (weights)</text>
+          <text class="node-label" x="70" y="145" text-anchor="middle">= memory bank</text>
+
+          <!-- inputs -->
+          <g transform="translate(160 40)">
+            <rect x="0" y="0" width="60" height="40" rx="8" style="fill:var(--accent-soft);stroke:var(--accent)"/>
+            <text class="node-label" x="30" y="24" text-anchor="middle">key x</text>
+          </g>
+          <g transform="translate(160 180)">
+            <rect x="0" y="0" width="60" height="40" rx="8" style="fill:var(--accent-soft);stroke:var(--accent)"/>
+            <text class="node-label" x="30" y="24" text-anchor="middle">∂L/∂y</text>
+          </g>
+
+          <!-- outer product -->
+          <g transform="translate(260 100)">
+            <rect x="0" y="0" width="140" height="60" rx="10" style="fill:var(--accent-soft);stroke:var(--accent)"/>
+            <text class="node-label bold" x="70" y="28" text-anchor="middle">−η · (∂L/∂y) x⊤</text>
+            <text class="node-label" x="70" y="48" text-anchor="middle">an outer product</text>
+          </g>
+
+          <!-- arrows -->
+          <line x1="220" y1="60" x2="260" y2="110" stroke="var(--accent)" stroke-width="2" stroke-linecap="round"/>
+          <line x1="220" y1="200" x2="260" y2="150" stroke="var(--accent)" stroke-width="2" stroke-linecap="round"/>
+          <line x1="120" y1="130" x2="260" y2="130" stroke="var(--fg-mute)" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="3 3"/>
+
+          <!-- formula -->
+          <text class="node-label" x="20" y="220">W ← W + v k⊤</text>
+          <text class="node-label accent" x="20" y="234">the same shape as training</text>
+        </svg>
+        <p class="caption">Hebbian outer product (top) and gradient descent (bottom) are the same algebra with different sources for <span class="inline">v</span>. Treating training as iterative memory writing changes what "fine-tune" and "in-context learn" mean.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- COMMON CONFUSIONS -->
+<section id="confusions">
+  <div class="wrap">
+    <span class="sec-label">Common confusions</span>
+    <h2>Four things people get wrong about this picture.</h2>
+
+    <div class="conf-grid">
+      <div class="conf-card">
+        <div class="num">Confusion 01</div>
+        <h4>"Linear attention has the same capacity as softmax attention."</h4>
+        <div class="wrong">Linear attention is an outer-product memory store with capacity <span class="inline">~ d<sub>k</sub></span>.</div>
+        <div class="right">Softmax attention is a sharply-nonlinear memory store with capacity that grows <span class="inline">exp(c·d<sub>k</sub>)</span>. The nonlinearity is not a tweak, it is the difference between dozens of memories and millions.</div>
+      </div>
+
+      <div class="conf-card">
+        <div class="num">Confusion 02</div>
+        <h4>"Attention is just mixing token embeddings."</h4>
+        <div class="wrong">Attention is a linear combination of value vectors weighted by token-token similarity.</div>
+        <div class="right">Attention is content-addressable recall. The values are the things you are trying to remember, the queries are what you are trying to remember them for, and the keys are how the memory store decides if a stored memory matches the query.</div>
+      </div>
+
+      <div class="conf-card">
+        <div class="num">Confusion 03</div>
+        <h4>"Bigger models remember more because they have more parameters."</h4>
+        <div class="wrong">Capacity grows linearly with parameter count.</div>
+        <div class="right">Parametric capacity grows with the rank of the recall matrix, which is bounded by key dimension. The model picks up the rest by storing memories in activations (context) and by stacking stores, not by adding parameters to a single store. A 70B model and a 7B model have the same per-layer capacity, the 70B has more layers.</div>
+      </div>
+
+      <div class="conf-card">
+        <div class="num">Confusion 04</div>
+        <h4>"KV-cache compression throws away memories."</h4>
+        <div class="wrong">KV-cache compression reduces recall fidelity by evicting keys.</div>
+        <div class="right">Good KV-cache compression picks keys with low interference, which is exactly the set of keys that were contributing the least to recall anyway. The capacity budget is bounded by interference-to-signal ratio, not by token count. You can usually halve the cache with negligible recall loss if you pick the right half.[1]</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- WHERE TO GO NEXT -->
+<section id="next">
+  <div class="wrap">
+    <span class="sec-label">Where to go next</span>
+    <h2>Three follow-ups, in order of effort.</h2>
+
+    <div class="next">
+      <a class="tile" href="https://alexwang.ai/posts/associative-memory/" target="_blank" rel="noopener">
+        <span class="tag">Read  ·  30 minutes</span>
+        <span class="name">Alex Wang's "You could have invented transformers from memory"</span>
+        <span class="desc">The cleanest derivation of all four stores, with working code and an interactive widget that lets you watch interference pile up as M grows.</span>
+      </a>
+      <a class="tile" href="https://arxiv.org/abs/2602.01863" target="_blank" rel="noopener">
+        <span class="tag">Paper  ·  90 minutes</span>
+        <span class="name">Transformers as Measure-Theoretic Associative Memory</span>
+        <span class="desc">The 2026 statistical theory that proves attention can recall-and-predict at the level of probability measures, with minimax-optimal rates.</span>
+      </a>
+      <a class="tile" href="https://arxiv.org/abs/2405.06394" target="_blank" rel="noopener">
+        <span class="tag">Paper  ·  45 minutes</span>
+        <span class="name">Memory Mosaics (Lamping, Voigt, Rao & Tenenbaum)</span>
+        <span class="desc">The original "transformer = network of kernel-regression associative memories" paper. Better at compositional generalization than transformers, worse at scale. Reads as a Rosetta Stone.</span>
+      </a>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div class="meta-row">
+      <span class="l">Day 22 of the explainer series. Built by Hermes using the explainer-builder skill.</span>
+      <span class="l">Mintlify tokens  ·  Inter + JetBrains Mono  ·  #18E299</span>
+    </div>
+  </div>
+</footer>
+
+<script>
+  (function(){
+    var btn = document.getElementById('themeToggle');
+    var iconLight = document.getElementById('iconLight');
+    var iconDark = document.getElementById('iconDark');
+    function syncIcon(){
+      var t = document.documentElement.getAttribute('data-theme');
+      if(t === 'dark'){ iconLight.style.display = ''; iconDark.style.display = 'none'; }
+      else { iconLight.style.display = 'none'; iconDark.style.display = ''; }
+    }
+    syncIcon();
+    btn.addEventListener('click', function(){
+      var cur = document.documentElement.getAttribute('data-theme');
+      var next = cur === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      try{ localStorage.setItem('theme', next); }catch(e){}
+      syncIcon();
+    });
+  })();
+</script>
+
+</body>
+</html>
