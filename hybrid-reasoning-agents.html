@@ -1,0 +1,994 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Hybrid Reasoning Agents: think in latent space, act in text</title>
+<meta name="description" content="Modern LLM agents reason in text, latent reasoning methods are cheap but cannot act. The HybridAgent paper bridges the two: a continuous thought stream with a HybridLink gate that surfaces into text only when a tool call is needed. 10.4% better, 2-3x cheaper, 35-55% fewer tokens.">
+<script>
+  (function(){
+    try{
+      var t = localStorage.getItem('theme');
+      if(!t){ t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'; }
+      document.documentElement.setAttribute('data-theme', t);
+    }catch(e){
+      document.documentElement.setAttribute('data-theme','light');
+    }
+  })();
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg: #ffffff;
+    --bg-soft: rgba(13,13,13,0.03);
+    --bg-card: #ffffff;
+    --bg-code: rgba(13,13,13,0.05);
+    --fg: #0d0d0d;
+    --fg-soft: rgba(13,13,13,0.72);
+    --fg-mute: rgba(13,13,13,0.50);
+    --border: rgba(13,13,13,0.08);
+    --border-strong: rgba(13,13,13,0.14);
+    --accent: #18E299;
+    --accent-2: #0fae74;
+    --accent-soft: rgba(24,226,153,0.12);
+    --accent-fg: #0d0d0d;
+    --warn: #d97706;
+    --danger: #dc2626;
+    --shadow: 0 1px 0 rgba(13,13,13,0.04), 0 12px 32px rgba(13,13,13,0.06);
+    --radius: 12px;
+    --radius-lg: 20px;
+  }
+  [data-theme="dark"]{
+    --bg: #0a0a0a;
+    --bg-soft: rgba(255,255,255,0.04);
+    --bg-card: #121212;
+    --bg-code: rgba(255,255,255,0.06);
+    --fg: #f5f5f5;
+    --fg-soft: rgba(255,255,255,0.78);
+    --fg-mute: rgba(255,255,255,0.52);
+    --border: rgba(255,255,255,0.08);
+    --border-strong: rgba(255,255,255,0.14);
+    --accent: #2af5a8;
+    --accent-2: #18E299;
+    --accent-soft: rgba(42,245,168,0.14);
+    --accent-fg: #0a0a0a;
+    --shadow: 0 1px 0 rgba(255,255,255,0.04), 0 12px 32px rgba(0,0,0,0.5);
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg: #0a0a0a;
+      --bg-soft: rgba(255,255,255,0.04);
+      --bg-card: #121212;
+      --bg-code: rgba(255,255,255,0.06);
+      --fg: #f5f5f5;
+      --fg-soft: rgba(255,255,255,0.78);
+      --fg-mute: rgba(255,255,255,0.52);
+      --border: rgba(255,255,255,0.08);
+      --border-strong: rgba(255,255,255,0.14);
+      --accent: #2af5a8;
+      --accent-2: #18E299;
+      --accent-soft: rgba(42,245,168,0.14);
+      --accent-fg: #0a0a0a;
+      --shadow: 0 1px 0 rgba(255,255,255,0.04), 0 12px 32px rgba(0,0,0,0.5);
+    }
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--fg);font-family:'Inter',system-ui,-apple-system,'Segoe UI',sans-serif;font-size:17px;line-height:1.55;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+  body{min-height:100vh;overflow-x:hidden}
+  code,pre,kbd,.mono{font-family:'JetBrains Mono','Geist Mono',ui-monospace,monospace}
+  a{color:var(--accent);text-decoration:none;border-bottom:1px solid transparent;transition:border-color .15s ease}
+  a:hover{border-bottom-color:var(--accent)}
+  .wrap{max-width:1200px;margin:0 auto;padding:0 24px}
+
+  nav.top{position:sticky;top:0;z-index:50;backdrop-filter:saturate(180%) blur(20px);background:color-mix(in oklab, var(--bg) 78%, transparent);border-bottom:1px solid var(--border)}
+  nav.top .row{display:flex;align-items:center;justify-content:space-between;height:60px;gap:16px}
+  nav.top .brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:15px;letter-spacing:-0.01em}
+  nav.top .brand .dot{width:10px;height:10px;border-radius:9999px;background:var(--accent);box-shadow:0 0 0 4px var(--accent-soft)}
+  nav.top .nav-links{display:flex;gap:6px;align-items:center}
+  nav.top .nav-links a{color:var(--fg-soft);font-size:14px;font-weight:500;padding:6px 10px;border-radius:8px;border:none}
+  nav.top .nav-links a:hover{background:var(--bg-soft);color:var(--fg)}
+  nav.top .nav-links .toggle{appearance:none;background:transparent;border:1px solid var(--border);color:var(--fg-soft);width:34px;height:34px;border-radius:9999px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;transition:all .15s ease}
+  nav.top .nav-links .toggle:hover{border-color:var(--accent);color:var(--accent)}
+  nav.top .nav-links .toggle svg{width:16px;height:16px}
+
+  /* HERO */
+  .hero{position:relative;padding:96px 0 64px;overflow:hidden}
+  .hero::before{content:"";position:absolute;inset:-20% -10% auto -10%;height:520px;background:radial-gradient(60% 60% at 50% 0%, var(--accent-soft) 0%, transparent 70%);pointer-events:none}
+  .hero .grid{position:absolute;inset:0;background-image:linear-gradient(var(--grid-line) 1px, transparent 1px), linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);background-size:64px 64px;mask-image:radial-gradient(70% 60% at 50% 30%, black 30%, transparent 80%);-webkit-mask-image:radial-gradient(70% 60% at 50% 30%, black 30%, transparent 80%);opacity:.6;pointer-events:none}
+  .hero-inner{position:relative;display:grid;gap:28px;max-width:880px;margin:0 auto;text-align:center;padding:0 var(--gutter)}
+  .hero .eyebrow{display:inline-flex;align-items:center;gap:8px;font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:0.14em;text-transform:uppercase;color:var(--fg-soft);background:var(--bg-soft);border:1px solid var(--border);padding:6px 12px;border-radius:9999px;margin:0 auto}
+  .hero .eyebrow .dot{width:6px;height:6px;border-radius:9999px;background:var(--accent);box-shadow:0 0 0 4px var(--accent-soft);animation:pulse 1.8s ease-in-out infinite}
+  @keyframes pulse{0%,100%{opacity:.55;transform:scale(1)}50%{opacity:1;transform:scale(1.08)}}
+  .hero h1{font-size:clamp(40px,5.5vw,64px);line-height:1.04;letter-spacing:-0.02em;margin:0;font-weight:800;max-width:18ch}
+  .hero h1 .accent{color:var(--accent)}
+  .hero .tagline{font-size:clamp(17px,1.6vw,19px);color:var(--fg-soft);max-width:64ch;margin:0 auto;line-height:1.5}
+  .hero .micro{display:grid;grid-template-columns:repeat(2, minmax(0,1fr));gap:10px 24px;margin:24px auto 0;max-width:640px;text-align:left}
+  .hero .micro li{list-style:none;display:flex;gap:10px;align-items:flex-start;font-size:14px;color:var(--fg-soft)}
+  .hero .micro li svg{flex:none;margin-top:2px;width:16px;height:16px;stroke:var(--accent)}
+
+  /* SECTION SHELL */
+  section{padding:72px 0;border-top:1px solid var(--border)}
+  section .lede{color:var(--fg-soft);font-size:18px;max-width:68ch;margin:0 0 32px}
+  .eyebrow-row{display:flex;align-items:center;gap:14px;margin-bottom:14px}
+  .eyebrow-row .label{font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:0.16em;text-transform:uppercase;color:var(--fg-mute)}
+  .eyebrow-row .line{flex:1;height:1px;background:var(--border)}
+  h2{font-size:clamp(28px,3.5vw,40px);font-weight:700;letter-spacing:-0.02em;line-height:1.1;margin:0 0 18px;max-width:24ch}
+  h2 .accent{color:var(--accent)}
+  h3{font-size:clamp(20px,2.2vw,24px);font-weight:600;letter-spacing:-0.01em;margin:0 0 12px}
+  p{margin:0 0 16px;color:var(--fg-soft);max-width:72ch;font-size:16.5px;line-height:1.6}
+  p:last-child{margin-bottom:0}
+  p strong{color:var(--fg);font-weight:600}
+  code.inline{font-family:'JetBrains Mono',monospace;font-size:0.88em;background:var(--bg-code);padding:2px 7px;border-radius:6px;color:var(--fg);border:1px solid var(--border)}
+  .math{font-family:'JetBrains Mono',monospace;font-size:0.92em;color:var(--fg);background:var(--bg-code);padding:3px 9px;border-radius:7px;border:1px solid var(--border);white-space:nowrap;display:inline-block}
+
+  .model-callout{position:relative;border:1px solid var(--border);border-radius:18px;background:linear-gradient(180deg, var(--bg-card), var(--bg-soft));padding:32px 28px;box-shadow:var(--shadow)}
+  .model-callout::before{content:"";position:absolute;left:0;top:0;width:4px;height:100%;background:var(--accent);border-radius:18px 0 0 18px}
+  .model-callout .label{display:block;font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:0.14em;text-transform:uppercase;color:var(--fg-mute);margin-bottom:10px}
+  .model-callout .sentence{font-size:clamp(20px,2.2vw,24px);line-height:1.32;letter-spacing:-0.01em;color:var(--fg);margin:0}
+
+  .diagram-shell{border:1px solid var(--border);border-radius:18px;background:var(--bg-card);padding:18px;box-shadow:var(--shadow)}
+  .diagram-shell svg{display:block;width:100%;height:auto}
+  .diagram-caption{font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--fg-mute);letter-spacing:0.04em;margin-top:12px;display:flex;gap:8px;align-items:flex-start}
+  .diagram-caption .num{color:var(--accent);font-weight:600;flex:none}
+
+  .walk{display:grid;grid-template-columns:1.1fr 0.9fr;gap:48px;align-items:start;margin-top:48px}
+  @media (max-width:880px){.walk{grid-template-columns:1fr;gap:24px}}
+  .walk-item .copy h3{font-size:22px;margin:0 0 10px}
+  .walk-item .copy p{font-size:16.5px;line-height:1.6;color:var(--fg-soft)}
+  .walk-item .why{margin-top:18px;padding:16px 18px;border:1px dashed var(--border-strong);border-radius:12px;background:var(--bg-soft)}
+  .walk-item .why b{display:block;font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:0.14em;text-transform:uppercase;color:var(--accent-2);margin-bottom:6px;font-weight:600}
+  .walk-item .why p{font-size:14.5px;color:var(--fg-soft);margin:0;line-height:1.5}
+
+  .confusions{display:grid;grid-template-columns:repeat(2, minmax(0,1fr));gap:18px;margin-top:32px}
+  @media (max-width:780px){.confusions{grid-template-columns:1fr}}
+  .conf{border:1px solid var(--border);border-radius:14px;padding:20px 20px 22px;background:var(--bg-card);position:relative;transition:border-color .2s ease, transform .2s ease}
+  .conf:hover{border-color:var(--accent)}
+  .conf .num{position:absolute;top:-12px;left:18px;background:var(--accent);color:var(--accent-fg);font-family:'JetBrains Mono',monospace;font-weight:700;font-size:11px;padding:4px 8px;border-radius:9999px;letter-spacing:0.04em}
+  .conf .wrong{color:var(--danger);font-size:14px;margin:0 0 8px;font-weight:500}
+  .conf .right{color:var(--fg);font-size:15px;margin:0;line-height:1.5}
+
+  .next{display:grid;grid-template-columns:repeat(3, minmax(0,1fr));gap:14px;margin-top:24px}
+  @media (max-width:880px){.next{grid-template-columns:1fr}}
+  .next a.tile{display:block;background:var(--bg-card);border:1px solid var(--border);border-radius:14px;padding:18px;color:var(--fg);text-decoration:none;border-bottom:1px solid var(--border);transition:all .15s ease}
+  .next a.tile:hover{border-color:var(--accent);transform:translateY(-2px)}
+  .next a.tile .kind{font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:0.14em;color:var(--accent);text-transform:uppercase}
+  .next a.tile .name{display:block;font-weight:600;font-size:16px;margin:6px 0 4px;letter-spacing:-0.01em}
+  .next a.tile .desc{font-size:13.5px;color:var(--fg-soft);line-height:1.45}
+
+  footer{padding:36px 0 64px;border-top:1px solid var(--border);color:var(--fg-mute);font-size:13px}
+  footer .inner{display:flex;flex-wrap:wrap;gap:14px;align-items:center;justify-content:space-between}
+  footer .mono{font-family:'JetBrains Mono',monospace;letter-spacing:0.06em}
+
+  /* ANIMATIONS */
+  @keyframes drawIn{from{stroke-dashoffset:600}to{stroke-dashoffset:0}}
+  @keyframes fadeUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+  @keyframes growBar{from{transform:scaleY(0)}to{transform:scaleY(1)}}
+  @keyframes ringPulse{0%,100%{opacity:0;r:6}50%{opacity:.8;r:11}}
+  @keyframes drift{from{transform:translateX(0)}to{transform:translateX(8px)}}
+  @keyframes ringExpand{0%{r:6;opacity:.6}100%{r:18;opacity:0}}
+  @keyframes surfaceBreak{0%{opacity:.2;transform:scale(.85)}40%{opacity:1;transform:scale(1.04)}100%{opacity:1;transform:scale(1)}}
+  @keyframes flowDash{from{stroke-dashoffset:0}to{stroke-dashoffset:-32}}
+  @keyframes typewriter{0%{width:0}100%{width:100%}}
+  @keyframes blink{0%,100%{opacity:1}50%{opacity:.35}}
+
+  .diagram-title{font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:0.14em;text-transform:uppercase;fill:var(--fg-mute)}
+  .node-label{font-family:'JetBrains Mono',monospace;font-size:11px;fill:var(--fg-soft)}
+  .node-label.bold{fill:var(--fg);font-weight:600;font-size:12px}
+  .axis-line{stroke:var(--border-strong);stroke-width:1;stroke-linecap:round;fill:none}
+  .grid-line{stroke:var(--border);stroke-width:.5;fill:none}
+  .flow{stroke-dasharray:6 4;animation:flowDash 1.2s linear infinite}
+  .text-mode{fill:var(--accent);font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:600}
+  .latent-mode{fill:var(--fg-soft);font-family:'JetBrains Mono',monospace;font-size:11px}
+
+  .hero-fade{animation:fadeUp .9s ease both}
+  .hero-fade.d1{animation-delay:.1s}
+  .hero-fade.d2{animation-delay:.25s}
+  .hero-fade.d3{animation-delay:.4s}
+  .hero-fade.d4{animation-delay:.55s}
+
+  @media (prefers-reduced-motion: reduce){
+    *,*::before,*::after{animation-duration:.01ms !important;animation-iteration-count:1 !important;transition:none !important}
+    .flow{stroke-dasharray:0}
+  }
+</style>
+</head>
+<body>
+
+<nav class="top">
+  <div class="wrap row">
+    <div class="brand">
+      <span class="dot" aria-hidden="true"></span>
+      <span>Hermes Explainer</span>
+    </div>
+    <div class="nav-links">
+      <a href="#hero">Top</a>
+      <a href="#model">Model</a>
+      <a href="#diagram">Diagram</a>
+      <a href="#walkthrough">Walkthrough</a>
+      <a href="#confusions">Confusions</a>
+      <a href="#next">Next</a>
+      <button class="toggle" id="themeToggle" aria-label="Toggle theme">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41-1.41"/></svg>
+      </button>
+    </div>
+  </div>
+</nav>
+
+<header class="hero" id="hero">
+  <div class="grid"></div>
+  <div class="hero-inner">
+    <span class="eyebrow hero-fade d1"><span class="dot"></span>Day 23 of the daily explainer series</span>
+    <h1 class="hero-fade d2">A useful agent <span class="accent">thinks in latent space</span> and <span class="accent">acts in text.</span></h1>
+    <p class="tagline hero-fade d3">A new paper, <em>Hybrid Reasoning Agents</em> by Zou and Qi and Chen and seven others (October 2026), bridges the two halves of the agent world. Most of the time the model chews on a continuous thought vector where reasoning is dense and cheap. The instant it needs to call a tool, it surfaces into text, fires the call, and sinks back. The result is better answers, 35 to 55 percent fewer tokens, and two to three times the throughput, all on the same backbone.</p>
+    <ul class="micro hero-fade d4">
+      <li><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>Why text-only agents are wasteful and latent-only agents cannot act</li>
+      <li><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>How a one-token HybridLink gate decides when to surface into text</li>
+      <li><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>Why working memory has to be a lossless hybrid buffer, not a summary</li>
+      <li><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>What HybridSFT plus HybridRL actually teach the model</li>
+    </ul>
+  </div>
+</header>
+
+<section id="model">
+  <div class="wrap">
+    <div class="eyebrow-row"><span class="label">The model in one sentence</span><span class="line"></span></div>
+    <h2>Read this first.</h2>
+    <div class="model-callout">
+      <span class="label">the one-sentence model</span>
+      <p class="sentence">An agent that thinks in continuous thought vectors and only surfaces into text when it needs to touch the world gets the cheapness of latent reasoning and the tool access of a text agent, and the surface breaks are a learnable policy, not a hard switch.</p>
+    </div>
+    <p style="margin-top:28px">If you remember nothing else, remember that. The paper is a clean instantiation of it: a tiny gate the model learns to flip, a lossless memory that does not lose either mode, and a two-stage post-training recipe that turns an ordinary base model into one that knows when to think in silence and when to speak.</p>
+  </div>
+</section>
+
+<section id="diagram">
+  <div class="wrap">
+    <div class="eyebrow-row"><span class="label">The mental model</span><span class="line"></span></div>
+    <h2>One continuous thought stream. <span class="accent">Surface breaks</span> for tools. <span class="accent">Working memory</span> across turns.</h2>
+    <p class="lede">The whole agent is a single generation pass. Most tokens are continuous thought vectors. A few are surface tokens, and a fraction of those are tool calls. The HybridLink is the seam.</p>
+    <div class="diagram-shell">
+      <svg viewBox="0 0 880 360" role="img" aria-labelledby="t1 d1">
+        <title id="t1">A generation trace with continuous thought and three text surface breaks</title>
+        <desc id="d1">A horizontal timeline. Most of the trace is filled with small continuous-thought blocks (squares) that are cheap and dense. Three of them are replaced by text tokens, and one of those text tokens is a tool call. The HybridLink is the one-token gate that flips a thought block into a text block.</desc>
+
+        <text class="diagram-title" x="20" y="22">a single generation pass  ·  latent by default, text when a tool is needed</text>
+
+        <!-- spine -->
+        <line class="axis-line" x1="40" y1="180" x2="840" y2="180"/>
+
+        <!-- tick marks for the time axis -->
+        <g style="font-family:'JetBrains Mono',monospace;font-size:10px;fill:var(--fg-mute)">
+          <text x="40"  y="320" text-anchor="middle">t=0</text>
+          <text x="220" y="320" text-anchor="middle">t=1</text>
+          <text x="400" y="320" text-anchor="middle">t=2</text>
+          <text x="580" y="320" text-anchor="middle">t=3</text>
+          <text x="760" y="320" text-anchor="middle">t=4</text>
+          <text x="840" y="320" text-anchor="middle">t=5</text>
+        </g>
+
+        <!-- latent thought blocks: small squares, lots of them, mostly gray -->
+        <g>
+          <rect x="48"  y="170" width="20" height="20" rx="3" style="fill:var(--bg-soft);stroke:var(--border-strong);stroke-width:1"/>
+          <rect x="72"  y="170" width="20" height="20" rx="3" style="fill:var(--bg-soft);stroke:var(--border-strong);stroke-width:1"/>
+          <rect x="96"  y="170" width="20" height="20" rx="3" style="fill:var(--bg-soft);stroke:var(--border-strong);stroke-width:1"/>
+          <rect x="120" y="170" width="20" height="20" rx="3" style="fill:var(--bg-soft);stroke:var(--border-strong);stroke-width:1"/>
+          <rect x="144" y="170" width="20" height="20" rx="3" style="fill:var(--bg-soft);stroke:var(--border-strong);stroke-width:1"/>
+          <rect x="168" y="170" width="20" height="20" rx="3" style="fill:var(--bg-soft);stroke:var(--border-strong);stroke-width:1"/>
+          <rect x="192" y="170" width="20" height="20" rx="3" style="fill:var(--bg-soft);stroke:var(--border-strong);stroke-width:1"/>
+        </g>
+        <text class="latent-mode" x="20" y="184">latent</text>
+
+        <!-- surface break 1: text tokens -->
+        <g>
+          <rect x="220" y="166" width="28" height="28" rx="4" style="fill:var(--accent);stroke:var(--accent-2);stroke-width:1">
+            <animate attributeName="opacity" from=".2" to="1" dur=".4s" begin="0.4s" fill="freeze"/>
+            <animateTransform attributeName="transform" type="scale" from=".85" to="1" dur=".4s" begin="0.4s" fill="freeze" additive="sum"/>
+          </rect>
+          <text x="234" y="186" text-anchor="middle" style="font-family:'JetBrains Mono',monospace;font-size:11px;fill:var(--accent-fg);font-weight:700">a</text>
+
+          <rect x="252" y="166" width="28" height="28" rx="4" style="fill:var(--accent);stroke:var(--accent-2);stroke-width:1">
+            <animate attributeName="opacity" from=".2" to="1" dur=".4s" begin="0.55s" fill="freeze"/>
+          </rect>
+          <text x="266" y="186" text-anchor="middle" style="font-family:'JetBrains Mono',monospace;font-size:11px;fill:var(--accent-fg);font-weight:700">s</text>
+
+          <rect x="284" y="166" width="28" height="28" rx="4" style="fill:var(--accent);stroke:var(--accent-2);stroke-width:1">
+            <animate attributeName="opacity" from=".2" to="1" dur=".4s" begin="0.7s" fill="freeze"/>
+          </rect>
+          <text x="298" y="186" text-anchor="middle" style="font-family:'JetBrains Mono',monospace;font-size:11px;fill:var(--accent-fg);font-weight:700">k</text>
+
+          <!-- tool call marker -->
+          <g transform="translate(322,180)">
+            <circle r="14" style="fill:none;stroke:var(--accent);stroke-width:1.5;opacity:.5">
+              <animate attributeName="r" from="6" to="18" dur="1.6s" begin="1.2s" repeatCount="indefinite"/>
+              <animate attributeName="opacity" from=".7" to="0" dur="1.6s" begin="1.2s" repeatCount="indefinite"/>
+            </circle>
+            <rect x="-14" y="-14" width="28" height="28" rx="14" style="fill:var(--accent-soft);stroke:var(--accent);stroke-width:1.4"/>
+            <text text-anchor="middle" y="4" style="font-family:'JetBrains Mono',monospace;font-size:11px;fill:var(--accent-2);font-weight:700">fn</text>
+          </g>
+        </g>
+        <text class="text-mode" x="20" y="184" style="opacity:0">
+          text<animate attributeName="opacity" from="0" to="1" dur=".3s" begin="0.4s" fill="freeze"/>
+        </text>
+
+        <!-- back to latent -->
+        <g>
+          <rect x="346" y="170" width="20" height="20" rx="3" style="fill:var(--bg-soft);stroke:var(--border-strong);stroke-width:1"/>
+          <rect x="370" y="170" width="20" height="20" rx="3" style="fill:var(--bg-soft);stroke:var(--border-strong);stroke-width:1"/>
+          <rect x="394" y="170" width="20" height="20" rx="3" style="fill:var(--bg-soft);stroke:var(--border-strong);stroke-width:1"/>
+        </g>
+
+        <!-- surface break 2: more text + tool -->
+        <g>
+          <rect x="420" y="166" width="28" height="28" rx="4" style="fill:var(--accent);stroke:var(--accent-2);stroke-width:1">
+            <animate attributeName="opacity" from=".2" to="1" dur=".4s" begin="1.6s" fill="freeze"/>
+          </rect>
+          <text x="434" y="186" text-anchor="middle" style="font-family:'JetBrains Mono',monospace;font-size:11px;fill:var(--accent-fg);font-weight:700">r</text>
+          <rect x="452" y="166" width="28" height="28" rx="4" style="fill:var(--accent);stroke:var(--accent-2);stroke-width:1">
+            <animate attributeName="opacity" from=".2" to="1" dur=".4s" begin="1.75s" fill="freeze"/>
+          </rect>
+          <text x="466" y="186" text-anchor="middle" style="font-family:'JetBrains Mono',monospace;font-size:11px;fill:var(--accent-fg);font-weight:700">e</text>
+          <g transform="translate(494,180)">
+            <rect x="-14" y="-14" width="28" height="28" rx="14" style="fill:var(--accent-soft);stroke:var(--accent);stroke-width:1.4"/>
+            <text text-anchor="middle" y="4" style="font-family:'JetBrains Mono',monospace;font-size:11px;fill:var(--accent-2);font-weight:700">fn</text>
+          </g>
+        </g>
+
+        <!-- more latent -->
+        <g>
+          <rect x="518" y="170" width="20" height="20" rx="3" style="fill:var(--bg-soft);stroke:var(--border-strong);stroke-width:1"/>
+          <rect x="542" y="170" width="20" height="20" rx="3" style="fill:var(--bg-soft);stroke:var(--border-strong);stroke-width:1"/>
+          <rect x="566" y="170" width="20" height="20" rx="3" style="fill:var(--bg-soft);stroke:var(--border-strong);stroke-width:1"/>
+        </g>
+
+        <!-- final answer text -->
+        <g>
+          <rect x="594" y="166" width="28" height="28" rx="4" style="fill:var(--accent);stroke:var(--accent-2);stroke-width:1">
+            <animate attributeName="opacity" from=".2" to="1" dur=".4s" begin="2.3s" fill="freeze"/>
+          </rect>
+          <text x="608" y="186" text-anchor="middle" style="font-family:'JetBrains Mono',monospace;font-size:11px;fill:var(--accent-fg);font-weight:700">4</text>
+          <rect x="626" y="166" width="28" height="28" rx="4" style="fill:var(--accent);stroke:var(--accent-2);stroke-width:1">
+            <animate attributeName="opacity" from=".2" to="1" dur=".4s" begin="2.45s" fill="freeze"/>
+          </rect>
+          <text x="640" y="186" text-anchor="middle" style="font-family:'JetBrains Mono',monospace;font-size:11px;fill:var(--accent-fg);font-weight:700">2</text>
+          <rect x="658" y="166" width="28" height="28" rx="4" style="fill:var(--accent);stroke:var(--accent-2);stroke-width:1">
+            <animate attributeName="opacity" from=".2" to="1" dur=".4s" begin="2.6s" fill="freeze"/>
+          </rect>
+          <text x="672" y="186" text-anchor="middle" style="font-family:'JetBrains Mono',monospace;font-size:11px;fill:var(--accent-fg);font-weight:700">.</text>
+          <rect x="690" y="166" width="28" height="28" rx="4" style="fill:var(--accent);stroke:var(--accent-2);stroke-width:1">
+            <animate attributeName="opacity" from=".2" to="1" dur=".4s" begin="2.75s" fill="freeze"/>
+          </rect>
+          <text x="704" y="186" text-anchor="middle" style="font-family:'JetBrains Mono',monospace;font-size:11px;fill:var(--accent-fg);font-weight:700">5</text>
+        </g>
+
+        <!-- final latent tail -->
+        <g>
+          <rect x="730" y="170" width="20" height="20" rx="3" style="fill:var(--bg-soft);stroke:var(--border-strong);stroke-width:1"/>
+          <rect x="754" y="170" width="20" height="20" rx="3" style="fill:var(--bg-soft);stroke:var(--border-strong);stroke-width:1"/>
+          <rect x="778" y="170" width="20" height="20" rx="3" style="fill:var(--bg-soft);stroke:var(--border-strong);stroke-width:1"/>
+        </g>
+
+        <!-- HybridLink gate (callout) -->
+        <g transform="translate(330,80)">
+          <line x1="0" y1="80" x2="0" y2="0" style="stroke:var(--accent);stroke-width:1;stroke-dasharray:2 2;opacity:.4"/>
+          <rect x="-66" y="-44" width="132" height="44" rx="10" style="fill:var(--bg-card);stroke:var(--accent);stroke-width:1.2"/>
+          <text text-anchor="middle" y="-26" style="font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:0.1em;fill:var(--accent-2)">HYBRIDLINK</text>
+          <text text-anchor="middle" y="-12" style="font-family:'Inter',sans-serif;font-size:11px;fill:var(--fg-soft)">flip into text mode</text>
+        </g>
+
+        <!-- Working memory band underneath -->
+        <g transform="translate(0,260)">
+          <rect x="40" y="0" width="800" height="40" rx="8" style="fill:var(--bg-soft);stroke:var(--border);stroke-width:1"/>
+          <text x="60" y="24" style="font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:0.1em;fill:var(--fg-soft)">WORKING MEMORY</text>
+          <text x="200" y="24" style="font-family:'Inter',sans-serif;font-size:12px;fill:var(--fg-soft)">lossless buffer of every continuous thought and every text token, replayed each turn</text>
+          <!-- flowing dashes -->
+          <line class="flow" x1="60" y1="38" x2="820" y2="38" style="stroke:var(--accent);stroke-width:1;opacity:.4"/>
+        </g>
+
+        <!-- legend -->
+        <g transform="translate(40,340)">
+          <rect x="0" y="-8" width="14" height="14" rx="3" style="fill:var(--bg-soft);stroke:var(--border-strong);stroke-width:1"/>
+          <text x="22" y="3" style="font-family:'JetBrains Mono',monospace;font-size:10px;fill:var(--fg-soft)">continuous thought</text>
+          <rect x="170" y="-8" width="14" height="14" rx="3" style="fill:var(--accent)"/>
+          <text x="192" y="3" style="font-family:'JetBrains Mono',monospace;font-size:10px;fill:var(--fg-soft)">text token (surface)</text>
+          <circle cx="340" cy="-1" r="9" style="fill:var(--accent-soft);stroke:var(--accent);stroke-width:1.2"/>
+          <text x="340" y="2" text-anchor="middle" style="font-family:'JetBrains Mono',monospace;font-size:9px;fill:var(--accent-2);font-weight:700">fn</text>
+          <text x="358" y="3" style="font-family:'JetBrains Mono',monospace;font-size:10px;fill:var(--fg-soft)">tool call</text>
+        </g>
+      </svg>
+      <p class="diagram-caption"><span class="num">FIG 1</span>The default unit is a continuous thought vector. The HybridLink flips a single thought into a text token when the policy decides now is the moment to talk, and a tool call is just a special text token. Working memory preserves the whole hybrid trace losslessly across turns.</p>
+    </div>
+  </div>
+</section>
+
+<section id="walkthrough">
+  <div class="wrap">
+    <div class="eyebrow-row"><span class="label">The walkthrough</span><span class="line"></span></div>
+    <h2>From <span class="accent">two camps</span> that cannot talk to each other, to <span class="accent">one model</span> that knows when to.</h2>
+    <p class="lede">Each of the six parts below answers one question. The diagram on the right of each is the same thing, drawn at the level that question cares about.</p>
+
+    <!-- 1 -->
+    <div class="walk">
+      <div class="copy">
+        <h3>1. The two camps cannot talk to each other.</h3>
+        <p>Text-only agents like ReAct and Toolformer think out loud. Every intermediate step is a sentence, which is great for transparency and tool use, and terrible for cost: each step spends a full forward pass decoding dozens of tokens that nobody will ever read.[1] Latent-only reasoners like Coconut and Quiet-STaR think in continuous vectors, which is 2 to 10 times cheaper and lets the model condense many text steps into one continuous step, but they cannot call a tool because there is no surface for the tool to attach to.[4]</p>
+        <p>Each camp has the thing the other wants. The text camp has action. The latent camp has efficiency. The question the paper asks is the obvious one: can an agent do most of its thinking in the cheap medium and only surface into the expensive one when the world requires it?</p>
+        <div class="why"><b>why this matters</b><p>If the answer is yes, the cost of a tool-using agent drops by half and the latency drops by a third on the same backbone. The model stops paying the full text price for every internal monologue.</p></div>
+      </div>
+      <div class="diagram-shell">
+        <svg viewBox="0 0 480 320" role="img" aria-labelledby="t2 d2">
+          <title id="t2">Two-agent world: text-only and latent-only</title>
+          <desc id="d2">Two columns. Left: text-only agent, ten visible text bubbles, no continuous thought. Right: latent-only agent, ten continuous thought blocks, no tool. Each is missing the other camp's capability.</desc>
+          <text class="diagram-title" x="20" y="22">text-only vs. latent-only  ·  the gap</text>
+
+          <!-- left: text agent -->
+          <g transform="translate(40,60)">
+            <text class="node-label bold" x="0" y="-10">text-only agent</text>
+            <rect x="0" y="0" width="180" height="220" rx="10" style="fill:var(--bg-card);stroke:var(--border);stroke-width:1"/>
+            <text x="90" y="20" text-anchor="middle" style="font-family:'JetBrains Mono',monospace;font-size:10px;fill:var(--fg-soft)">all 10 steps are text</text>
+            <g>
+              <rect x="10" y="32" width="160" height="16" rx="3" style="fill:var(--accent-soft);stroke:var(--accent);stroke-width:.8">
+                <animate attributeName="opacity" from="0" to="1" dur=".3s" begin="0.2s" fill="freeze"/>
+              </rect>
+              <text x="14" y="44" style="font-family:'JetBrains Mono',monospace;font-size:10px;fill:var(--fg)">step 1: think</text>
+              <rect x="10" y="52" width="160" height="16" rx="3" style="fill:var(--accent-soft);stroke:var(--accent);stroke-width:.8">
+                <animate attributeName="opacity" from="0" to="1" dur=".3s" begin="0.3s" fill="freeze"/>
+              </rect>
+              <text x="14" y="64" style="font-family:'JetBrains Mono',monospace;font-size:10px;fill:var(--fg)">step 2: think</text>
+              <rect x="10" y="72" width="160" height="16" rx="3" style="fill:var(--accent-soft);stroke:var(--accent);stroke-width:.8">
+                <animate attributeName="opacity" from="0" to="1" dur=".3s" begin="0.4s" fill="freeze"/>
+              </rect>
+              <text x="14" y="84" style="font-family:'JetBrains Mono',monospace;font-size:10px;fill:var(--fg)">step 3: tool</text>
+              <rect x="10" y="92" width="160" height="16" rx="3" style="fill:var(--accent-soft);stroke:var(--accent);stroke-width:.8">
+                <animate attributeName="opacity" from="0" to="1" dur=".3s" begin="0.5s" fill="freeze"/>
+              </rect>
+              <text x="14" y="104" style="font-family:'JetBrains Mono',monospace;font-size:10px;fill:var(--fg)">step 4: think</text>
+              <rect x="10" y="112" width="160" height="16" rx="3" style="fill:var(--accent-soft);stroke:var(--accent);stroke-width:.8">
+                <animate attributeName="opacity" from="0" to="1" dur=".3s" begin="0.6s" fill="freeze"/>
+              </rect>
+              <text x="14" y="124" style="font-family:'JetBrains Mono',monospace;font-size:10px;fill:var(--fg)">step 5: think</text>
+              <rect x="10" y="132" width="160" height="16" rx="3" style="fill:var(--accent-soft);stroke:var(--accent);stroke-width:.8">
+                <animate attributeName="opacity" from="0" to="1" dur=".3s" begin="0.7s" fill="freeze"/>
+              </rect>
+              <text x="14" y="144" style="font-family:'JetBrains Mono',monospace;font-size:10px;fill:var(--fg)">step 6: tool</text>
+              <rect x="10" y="152" width="160" height="16" rx="3" style="fill:var(--accent-soft);stroke:var(--accent);stroke-width:.8">
+                <animate attributeName="opacity" from="0" to="1" dur=".3s" begin="0.8s" fill="freeze"/>
+              </rect>
+              <text x="14" y="164" style="font-family:'JetBrains Mono',monospace;font-size:10px;fill:var(--fg)">step 7: think</text>
+              <rect x="10" y="172" width="160" height="16" rx="3" style="fill:var(--accent-soft);stroke:var(--accent);stroke-width:.8">
+                <animate attributeName="opacity" from="0" to="1" dur=".3s" begin="0.9s" fill="freeze"/>
+              </rect>
+              <text x="14" y="184" style="font-family:'JetBrains Mono',monospace;font-size:10px;fill:var(--fg)">step 8: think</text>
+              <rect x="10" y="192" width="160" height="16" rx="3" style="fill:var(--accent-soft);stroke:var(--accent);stroke-width:.8">
+                <animate attributeName="opacity" from="0" to="1" dur=".3s" begin="1.0s" fill="freeze"/>
+              </rect>
+              <text x="14" y="204" style="font-family:'JetBrains Mono',monospace;font-size:10px;fill:var(--fg)">step 9: think</text>
+            </g>
+            <text x="90" y="240" text-anchor="middle" style="font-family:'JetBrains Mono',monospace;font-size:10px;fill:var(--fg-mute)">+ tools  -  cost</text>
+          </g>
+
+          <!-- right: latent agent -->
+          <g transform="translate(260,60)">
+            <text class="node-label bold" x="0" y="-10">latent-only agent</text>
+            <rect x="0" y="0" width="180" height="220" rx="10" style="fill:var(--bg-card);stroke:var(--border);stroke-width:1"/>
+            <text x="90" y="20" text-anchor="middle" style="font-family:'JetBrains Mono',monospace;font-size:10px;fill:var(--fg-soft)">all 10 steps are continuous</text>
+            <g>
+              <rect x="10" y="32" width="160" height="16" rx="3" style="fill:var(--bg-soft);stroke:var(--border-strong);stroke-width:.8">
+                <animate attributeName="opacity" from="0" to="1" dur=".3s" begin="0.2s" fill="freeze"/>
+              </rect>
+              <rect x="10" y="52" width="160" height="16" rx="3" style="fill:var(--bg-soft);stroke:var(--border-strong);stroke-width:.8">
+                <animate attributeName="opacity" from="0" to="1" dur=".3s" begin="0.3s" fill="freeze"/>
+              </rect>
+              <rect x="10" y="72" width="160" height="16" rx="3" style="fill:var(--bg-soft);stroke:var(--border-strong);stroke-width:.8">
+                <animate attributeName="opacity" from="0" to="1" dur=".3s" begin="0.4s" fill="freeze"/>
+              </rect>
+              <rect x="10" y="92" width="160" height="16" rx="3" style="fill:var(--bg-soft);stroke:var(--border-strong);stroke-width:.8">
+                <animate attributeName="opacity" from="0" to="1" dur=".3s" begin="0.5s" fill="freeze"/>
+              </rect>
+              <rect x="10" y="112" width="160" height="16" rx="3" style="fill:var(--bg-soft);stroke:var(--border-strong);stroke-width:.8">
+                <animate attributeName="opacity" from="0" to="1" dur=".3s" begin="0.6s" fill="freeze"/>
+              </rect>
+              <rect x="10" y="132" width="160" height="16" rx="3" style="fill:var(--bg-soft);stroke:var(--border-strong);stroke-width:.8">
+                <animate attributeName="opacity" from="0" to="1" dur=".3s" begin="0.7s" fill="freeze"/>
+              </rect>
+              <rect x="10" y="152" width="160" height="16" rx="3" style="fill:var(--bg-soft);stroke:var(--border-strong);stroke-width:.8">
+                <animate attributeName="opacity" from="0" to="1" dur=".3s" begin="0.8s" fill="freeze"/>
+              </rect>
+              <rect x="10" y="172" width="160" height="16" rx="3" style="fill:var(--bg-soft);stroke:var(--border-strong);stroke-width:.8">
+                <animate attributeName="opacity" from="0" to="1" dur=".3s" begin="0.9s" fill="freeze"/>
+              </rect>
+              <rect x="10" y="192" width="160" height="16" rx="3" style="fill:var(--bg-soft);stroke:var(--border-strong);stroke-width:.8">
+                <animate attributeName="opacity" from="0" to="1" dur=".3s" begin="1.0s" fill="freeze"/>
+              </rect>
+            </g>
+            <text x="90" y="240" text-anchor="middle" style="font-family:'JetBrains Mono',monospace;font-size:10px;fill:var(--fg-mute)">+ cost  -  tools</text>
+          </g>
+
+          <!-- arrow between them -->
+          <g transform="translate(240,170)">
+            <line x1="-20" y1="0" x2="20" y2="0" style="stroke:var(--accent);stroke-width:1.6;stroke-linecap:round">
+              <animate attributeName="opacity" from="0" to="1" dur=".4s" begin="1.4s" fill="freeze"/>
+            </line>
+            <polygon points="20,0 14,-4 14,4" style="fill:var(--accent);opacity:0">
+              <animate attributeName="opacity" from="0" to="1" dur=".3s" begin="1.5s" fill="freeze"/>
+            </polygon>
+            <text text-anchor="middle" y="-10" style="font-family:'JetBrains Mono',monospace;font-size:10px;fill:var(--accent-2);opacity:0">
+              HYBRID<animate attributeName="opacity" from="0" to="1" dur=".3s" begin="1.4s" fill="freeze"/>
+            </text>
+          </g>
+        </svg>
+        <p class="diagram-caption"><span class="num">FIG 2</span>Text agents leak cost through every internal step. Latent agents compress beautifully but lose the surface that tools need. The hybrid is not a third camp. It is the same model, picking which mode to use at each step.</p>
+      </div>
+    </div>
+
+    <!-- 2 -->
+    <div class="walk">
+      <div class="copy">
+        <h3>2. A continuous thought is just a hidden state you keep generating.</h3>
+        <p>Mechanically, a continuous thought is the hidden state of the model after one forward step, fed back in as input for the next step, with no decoding to text in between. Coconut calls these <code class="inline">⟨bot⟩</code> tokens. Quiet-STaR calls them <code class="inline">⟨|think|⟩</code>. The HybridAgent paper just calls them continuous thoughts, and the model owns a vocabulary token that means "stay in latent mode for one more step."[4]</p>
+        <p>The key fact is that continuous thoughts are far denser than text. A 4k-dim hidden state holds more reasoning per byte than 4k of decoded tokens, because every dimension of the hidden state participates in the next step, while most decoded tokens are highly redundant with their neighbors. The Coconut paper showed roughly 2 to 4 times the information per continuous step, which is where the throughput gains come from.[1]</p>
+        <div class="why"><b>why this matters</b><p>You can think of a continuous thought as a skip-connection in time. The model writes its own scratchpad into the next input, and the scratchpad is dense. That is the whole reason the hybrid is cheaper, and it is why the model is willing to think for many steps in latent mode without surfacing.</p></div>
+      </div>
+      <div class="diagram-shell">
+        <svg viewBox="0 0 480 320" role="img" aria-labelledby="t3 d3">
+          <title id="t3">Continuous thought as feedback hidden state</title>
+          <desc id="d3">A loop diagram. The model forward block outputs a hidden state. Without surface, that hidden state is fed back as input. With surface, the model decodes a token, embeds it, and feeds the embedding back. The two paths are the same loop, the surface just spends a decoder.</desc>
+          <text class="diagram-title" x="20" y="22">one forward step, two return paths</text>
+
+          <g transform="translate(60,90)">
+            <rect x="0" y="0" width="140" height="80" rx="10" style="fill:var(--bg-card);stroke:var(--border);stroke-width:1.2"/>
+            <text x="70" y="34" text-anchor="middle" style="font-family:'JetBrains Mono',monospace;font-size:11px;fill:var(--fg-soft)">model</text>
+            <text x="70" y="52" text-anchor="middle" style="font-family:'JetBrains Mono',monospace;font-size:11px;fill:var(--fg-soft)">forward</text>
+            <text x="70" y="68" text-anchor="middle" style="font-family:'JetBrains Mono',monospace;font-size:10px;fill:var(--fg-mute)">h_in -&gt; h_out</text>
+          </g>
+
+          <!-- top path: latent loop -->
+          <g>
+            <line x1="200" y1="100" x2="280" y2="100" style="stroke:var(--fg-mute);stroke-width:1.4;stroke-dasharray:4 4;fill:none">
+              <animate attributeName="stroke-dashoffset" from="0" to="-16" dur="1.2s" repeatCount="indefinite"/>
+            </line>
+            <line x1="280" y1="100" x2="280" y2="200" style="stroke:var(--fg-mute);stroke-width:1.4;stroke-dasharray:4 4;fill:none">
+              <animate attributeName="stroke-dashoffset" from="0" to="-16" dur="1.2s" repeatCount="indefinite"/>
+            </line>
+            <line x1="280" y1="200" x2="130" y2="200" style="stroke:var(--fg-mute);stroke-width:1.4;stroke-dasharray:4 4;fill:none">
+              <animate attributeName="stroke-dashoffset" from="0" to="-16" dur="1.2s" repeatCount="indefinite"/>
+            </line>
+            <line x1="130" y1="200" x2="130" y2="170" style="stroke:var(--fg-mute);stroke-width:1.4;stroke-dasharray:4 4;fill:none">
+              <animate attributeName="stroke-dashoffset" from="0" to="-16" dur="1.2s" repeatCount="indefinite"/>
+            </line>
+            <polygon points="130,170 126,178 134,178" style="fill:var(--fg-mute)"/>
+            <text x="220" y="92" style="font-family:'JetBrains Mono',monospace;font-size:10px;fill:var(--fg-mute)">latent path  ·  no decoder</text>
+            <text x="200" y="220" text-anchor="middle" style="font-family:'JetBrains Mono',monospace;font-size:10px;fill:var(--fg-mute)">h_out -&gt; next h_in</text>
+          </g>
+
+          <!-- bottom path: surface (text) -->
+          <g>
+            <line x1="200" y1="160" x2="280" y2="160" style="stroke:var(--accent);stroke-width:1.6;fill:none">
+              <animate attributeName="opacity" from="0" to="1" dur=".4s" begin="0.5s" fill="freeze"/>
+            </line>
+            <g transform="translate(310,160)">
+              <rect x="0" y="-16" width="80" height="32" rx="6" style="fill:var(--accent-soft);stroke:var(--accent);stroke-width:1.2;opacity:0">
+                <animate attributeName="opacity" from="0" to="1" dur=".4s" begin="0.7s" fill="freeze"/>
+              </rect>
+              <text x="40" y="4" text-anchor="middle" style="font-family:'JetBrains Mono',monospace;font-size:10px;fill:var(--accent-2);font-weight:600;opacity:0">
+                decoder<animate attributeName="opacity" from="0" to="1" dur=".3s" begin="0.9s" fill="freeze"/>
+              </text>
+            </g>
+            <line x1="390" y1="160" x2="430" y2="160" style="stroke:var(--accent);stroke-width:1.6;fill:none;opacity:0">
+              <animate attributeName="opacity" from="0" to="1" dur=".3s" begin="1.0s" fill="freeze"/>
+            </line>
+            <g transform="translate(430,160)">
+              <rect x="0" y="-12" width="20" height="24" rx="4" style="fill:var(--accent);opacity:0">
+                <animate attributeName="opacity" from="0" to="1" dur=".3s" begin="1.2s" fill="freeze"/>
+              </rect>
+              <text x="10" y="4" text-anchor="middle" style="font-family:'JetBrains Mono',monospace;font-size:10px;fill:var(--accent-fg);font-weight:700;opacity:0">
+                a<animate attributeName="opacity" from="0" to="1" dur=".3s" begin="1.2s" fill="freeze"/>
+              </text>
+            </g>
+            <line x1="450" y1="160" x2="450" y2="240" style="stroke:var(--accent);stroke-width:1.6;fill:none;opacity:0">
+              <animate attributeName="opacity" from="0" to="1" dur=".3s" begin="1.4s" fill="freeze"/>
+            </line>
+            <line x1="450" y1="240" x2="200" y2="240" style="stroke:var(--accent);stroke-width:1.6;fill:none;opacity:0">
+              <animate attributeName="opacity" from="0" to="1" dur=".3s" begin="1.4s" fill="freeze"/>
+            </line>
+            <line x1="200" y1="240" x2="200" y2="170" style="stroke:var(--accent);stroke-width:1.6;fill:none;opacity:0">
+              <animate attributeName="opacity" from="0" to="1" dur=".3s" begin="1.4s" fill="freeze"/>
+            </line>
+            <polygon points="200,170 196,178 204,178" style="fill:var(--accent);opacity:0">
+              <animate attributeName="opacity" from="0" to="1" dur=".3s" begin="1.5s" fill="freeze"/>
+            </polygon>
+            <text x="320" y="200" style="font-family:'JetBrains Mono',monospace;font-size:10px;fill:var(--accent-2);opacity:0">
+              text path  ·  decode + embed + re-feed<animate attributeName="opacity" from="0" to="1" dur=".3s" begin="1.0s" fill="freeze"/>
+            </text>
+          </g>
+
+          <text x="20" y="290" style="font-family:'JetBrains Mono',monospace;font-size:10px;fill:var(--fg-mute)">a continuous thought is the cheap return path. a text token is the expensive one.</text>
+        </svg>
+        <p class="diagram-caption"><span class="num">FIG 3</span>The decoder is the only piece the latent path skips. A continuous thought is the hidden state routed back to the input projection. A text token is the hidden state passed through the LM head, the embedding table, and then back to the input projection. The hybrid just decides which return path each step takes.</p>
+      </div>
+    </div>
+
+    <!-- 3 -->
+    <div class="walk">
+      <div class="copy">
+        <h3>3. The HybridLink is a one-token gate.</h3>
+        <p>Architecturally, the HybridLink is tiny. It is a learned adapter that takes the model's hidden state and emits a binary decision: stay in latent mode, or surface into text. When the gate flips on, the model's next forward pass is constrained to produce a text token; when it flips off, the next forward pass is constrained to keep the thought latent. The whole thing is one MLP on top of the hidden state, plus a single-mode vocabulary projection swap.[1]</p>
+        <p>This is the part that looks underwhelming in the architecture diagram and does the heavy lifting in the training. The gate is what makes the rest of the system work. Without a learnable policy for when to surface, you either surface every step (back to text agents) or never (back to latent agents). With it, the model can stay latent for ten steps when it is doing pure algebra, then surface for one token to call a tool, then sink back for ten more.[1]</p>
+        <div class="why"><b>why this matters</b><p>The gate is a single learned policy sitting on top of the base model. That means you can drop HybridLink into an already-trained agent with very little extra compute, and the base model weights stay mostly intact. The cost of the hybrid is the cost of one extra adapter and one extra post-training pass.</p></div>
+      </div>
+      <div class="diagram-shell">
+        <svg viewBox="0 0 480 320" role="img" aria-labelledby="t4 d4">
+          <title id="t4">The HybridLink gate and its two paths</title>
+          <desc id="d4">A hidden state vector enters a small MLP that emits a binary score. High score routes the next step through a text vocabulary head, low score routes it through a continuous-thought head. The same hidden state feeds both branches.</desc>
+          <text class="diagram-title" x="20" y="22">the HybridLink adapter  ·  one MLP, two heads</text>
+
+          <!-- hidden state input -->
+          <g transform="translate(40,150)">
+            <text x="60" y="-12" text-anchor="middle" style="font-family:'JetBrains Mono',monospace;font-size:10px;fill:var(--fg-mute)">hidden state h</text>
+            <rect x="0" y="0" width="120" height="40" rx="8" style="fill:var(--bg-soft);stroke:var(--border-strong);stroke-width:1"/>
+            <text x="60" y="24" text-anchor="middle" style="font-family:'JetBrains Mono',monospace;font-size:11px;fill:var(--fg)">[0.12, -0.44, ...]</text>
+          </g>
+
+          <!-- arrow to gate -->
+          <line x1="160" y1="170" x2="220" y2="170" style="stroke:var(--fg-soft);stroke-width:1.4;fill:none">
+            <animate attributeName="stroke-dashoffset" from="0" to="-12" dur="1s" repeatCount="indefinite"/>
+          </line>
+
+          <!-- gate MLP -->
+          <g transform="translate(220,140)">
+            <rect x="0" y="0" width="80" height="60" rx="10" style="fill:var(--accent-soft);stroke:var(--accent);stroke-width:1.4"/>
+            <text x="40" y="24" text-anchor="middle" style="font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:0.08em;fill:var(--accent-2)">HYBRID</text>
+            <text x="40" y="40" text-anchor="middle" style="font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:0.08em;fill:var(--accent-2)">LINK</text>
+            <text x="40" y="54" text-anchor="middle" style="font-family:'JetBrains Mono',monospace;font-size:9px;fill:var(--fg-mute)">1-layer MLP</text>
+          </g>
+
+          <!-- two paths -->
+          <line x1="300" y1="160" x2="360" y2="100" style="stroke:var(--fg-mute);stroke-width:1.4;fill:none;stroke-dasharray:3 3">
+            <animate attributeName="stroke-dashoffset" from="0" to="-12" dur="1s" repeatCount="indefinite"/>
+          </line>
+          <line x1="300" y1="180" x2="360" y2="240" style="stroke:var(--accent);stroke-width:1.6;fill:none">
+            <animate attributeName="stroke-dashoffset" from="0" to="-12" dur="1s" repeatCount="indefinite"/>
+          </line>
+
+          <!-- latent head (top) -->
+          <g transform="translate(360,60)">
+            <rect x="0" y="0" width="100" height="50" rx="8" style="fill:var(--bg-card);stroke:var(--border-strong);stroke-width:1"/>
+            <text x="50" y="20" text-anchor="middle" style="font-family:'JetBrains Mono',monospace;font-size:10px;fill:var(--fg-soft)">latent head</text>
+            <text x="50" y="36" text-anchor="middle" style="font-family:'JetBrains Mono',monospace;font-size:9px;fill:var(--fg-mute)">h_out -&gt; embed</text>
+          </g>
+
+          <!-- text head (bottom) -->
+          <g transform="translate(360,220)">
+            <rect x="0" y="0" width="100" height="50" rx="8" style="fill:var(--accent-soft);stroke:var(--accent);stroke-width:1.2"/>
+            <text x="50" y="20" text-anchor="middle" style="font-family:'JetBrains Mono',monospace;font-size:10px;fill:var(--accent-2);font-weight:600">text head</text>
+            <text x="50" y="36" text-anchor="middle" style="font-family:'JetBrains Mono',monospace;font-size:9px;fill:var(--fg-mute)">h_out -&gt; softmax</text>
+          </g>
+
+          <!-- labels -->
+          <text x="200" y="86" style="font-family:'JetBrains Mono',monospace;font-size:10px;fill:var(--fg-mute)">gate = stay latent</text>
+          <text x="200" y="278" style="font-family:'JetBrains Mono',monospace;font-size:10px;fill:var(--accent-2)">gate = surface to text</text>
+        </svg>
+        <p class="diagram-caption"><span class="num">FIG 4</span>The HybridLink is one MLP on top of the hidden state. It is trained to predict whether the next step should be latent or text. The rest of the architecture is unchanged: the same backbone, the same attention, the same tool-call parser. Only the routing changes.</p>
+      </div>
+    </div>
+
+    <!-- 4 -->
+    <div class="walk">
+      <div class="copy">
+        <h3>4. Working memory has to be a lossless hybrid buffer.</h3>
+        <p>Most agent systems keep a summary of past turns, and summaries throw things away. The HybridAgent paper insists that working memory be a lossless buffer of every continuous thought and every text token, replayed into the next turn's context. If you summarize the latent thoughts, you lose exactly the part the latent mode was cheap to produce, which defeats the design.[1]</p>
+        <p>The clever part is the format. Working memory stores a sequence of <code class="inline">(mode, payload)</code> records: a list of continuous thought vectors interleaved with text tokens and tool calls. The next turn's input is the sequence up to the last user message plus everything that came out of the model after it. Replay is free because the model is causal, so it can keep reading the buffer without re-encoding past turns.[1]</p>
+        <p>The cost is memory, not compute. Storing a few thousand continuous thought vectors per turn is cheap relative to the model size, and the paper's experiments show the working memory budget dominates the cost only after 30-plus turns of long reasoning. For typical 5-15 turn agent traces, it is not the bottleneck.</p>
+        <div class="why"><b>why this matters</b><p>This is the design choice that lets the hybrid be inspected. You can print out every text token, and you can project the continuous thoughts back through the unembedding to see what vocabulary distribution each one was close to. That is what makes latent reasoning transparent, and that is what the paper uses to debug and to evaluate.</p></div>
+      </div>
+      <div class="diagram-shell">
+        <svg viewBox="0 0 480 320" role="img" aria-labelledby="t5 d5">
+          <title id="t5">Working memory as a lossless hybrid buffer</title>
+          <desc id="d5">A horizontal tape with alternating record types: latent block, latent block, text token, latent block, tool call, latent block, text token. Each record is shown as a small chip. The tape is read left to right by the model on the next turn.</desc>
+          <text class="diagram-title" x="20" y="22">working memory  ·  one tape, two record types</text>
+
+          <!-- tape -->
+          <g transform="translate(20,80)">
+            <rect x="0" y="0" width="440" height="180" rx="10" style="fill:var(--bg-soft);stroke:var(--border);stroke-width:1"/>
+
+            <!-- records row -->
+            <g transform="translate(14,30)">
+              <g><rect x="0" y="0" width="36" height="28" rx="4" style="fill:var(--bg-card);stroke:var(--border-strong);stroke-width:.8"/><text x="18" y="18" text-anchor="middle" style="font-family:'JetBrains Mono',monospace;font-size:9px;fill:var(--fg-mute)">L</text></g>
+              <g><rect x="42" y="0" width="36" height="28" rx="4" style="fill:var(--bg-card);stroke:var(--border-strong);stroke-width:.8"/><text x="60" y="18" text-anchor="middle" style="font-family:'JetBrains Mono',monospace;font-size:9px;fill:var(--fg-mute)">L</text></g>
+              <g><rect x="84" y="0" width="36" height="28" rx="4" style="fill:var(--accent);stroke:var(--accent-2);stroke-width:.8"/><text x="102" y="18" text-anchor="middle" style="font-family:'JetBrains Mono',monospace;font-size:9px;fill:var(--accent-fg);font-weight:700">a</text></g>
+              <g><rect x="126" y="0" width="36" height="28" rx="4" style="fill:var(--bg-card);stroke:var(--border-strong);stroke-width:.8"/><text x="144" y="18" text-anchor="middle" style="font-family:'JetBrains Mono',monospace;font-size:9px;fill:var(--fg-mute)">L</text></g>
+              <g><rect x="168" y="0" width="36" height="28" rx="4" style="fill:var(--bg-card);stroke:var(--border-strong);stroke-width:.8"/><text x="186" y="18" text-anchor="middle" style="font-family:'JetBrains Mono',monospace;font-size:9px;fill:var(--fg-mute)">L</text></g>
+              <g><rect x="210" y="0" width="36" height="28" rx="4" style="fill:var(--accent-soft);stroke:var(--accent);stroke-width:1.2"/><text x="228" y="18" text-anchor="middle" style="font-family:'JetBrains Mono',monospace;font-size:9px;fill:var(--accent-2);font-weight:700">fn</text></g>
+              <g><rect x="252" y="0" width="36" height="28" rx="4" style="fill:var(--bg-card);stroke:var(--border-strong);stroke-width:.8"/><text x="270" y="18" text-anchor="middle" style="font-family:'JetBrains Mono',monospace;font-size:9px;fill:var(--fg-mute)">L</text></g>
+              <g><rect x="294" y="0" width="36" height="28" rx="4" style="fill:var(--accent);stroke:var(--accent-2);stroke-width:.8"/><text x="312" y="18" text-anchor="middle" style="font-family:'JetBrains Mono',monospace;font-size:9px;fill:var(--accent-fg);font-weight:700">4</text></g>
+              <g><rect x="336" y="0" width="36" height="28" rx="4" style="fill:var(--accent);stroke:var(--accent-2);stroke-width:.8"/><text x="354" y="18" text-anchor="middle" style="font-family:'JetBrains Mono',monospace;font-size:9px;fill:var(--accent-fg);font-weight:700">2</text></g>
+              <g><rect x="378" y="0" width="36" height="28" rx="4" style="fill:var(--bg-card);stroke:var(--border-strong);stroke-width:.8"/><text x="396" y="18" text-anchor="middle" style="font-family:'JetBrains Mono',monospace;font-size:9px;fill:var(--fg-mute)">L</text></g>
+            </g>
+
+            <!-- labels -->
+            <text x="14" y="80" style="font-family:'JetBrains Mono',monospace;font-size:10px;fill:var(--fg-soft)">L = continuous thought vector</text>
+            <text x="14" y="98" style="font-family:'JetBrains Mono',monospace;font-size:10px;fill:var(--fg-soft)">a, 4, 2 = text tokens (replayable)</text>
+            <text x="14" y="116" style="font-family:'JetBrains Mono',monospace;font-size:10px;fill:var(--fg-soft)">fn = tool call result, embedded as text</text>
+            <text x="14" y="138" style="font-family:'JetBrains Mono',monospace;font-size:10px;fill:var(--fg-mute)">replayed losslessly into the next turn</text>
+
+            <!-- play head -->
+            <g>
+              <polygon points="220,-12 232,-2 220,8" style="fill:var(--accent);opacity:0">
+                <animate attributeName="opacity" from="0" to="1" dur=".4s" begin="1s" fill="freeze"/>
+              </polygon>
+              <line x1="226" y1="2" x2="226" y2="30" style="stroke:var(--accent);stroke-width:1.4;opacity:0">
+                <animate attributeName="opacity" from="0" to="1" dur=".4s" begin="1s" fill="freeze"/>
+                <animate attributeName="x1" from="60" to="394" dur="2.4s" begin="1.2s" fill="freeze"/>
+                <animate attributeName="x2" from="60" to="394" dur="2.4s" begin="1.2s" fill="freeze"/>
+              </line>
+            </g>
+          </g>
+        </svg>
+        <p class="diagram-caption"><span class="num">FIG 5</span>Working memory is a tape. Every record has a type and a payload. The continuous thought records are kept as raw hidden states. The text records are the literal tokens. The next turn reads the tape, causal-style, and the model picks up exactly where it left off.</p>
+      </div>
+    </div>
+
+    <!-- 5 -->
+    <div class="walk">
+      <div class="copy">
+        <h3>5. The post-training is two stages, and the order matters.</h3>
+        <p>You cannot just take a base model and expect the HybridLink gate to do anything sensible. The paper trains it in two passes.[1]</p>
+        <p>The first pass is <strong>HybridSFT</strong>: take a teacher that thinks in text, take its successful agent traces, and replace blocks of internal text steps with continuous thoughts. Train the student to mimic the teacher's surface tokens and to produce a continuous thought that lands the model in roughly the same hidden state as the teacher would have after the corresponding text. This stage is what teaches the backbone to coordinate with the gate, and it is what makes HybridLink's output meaningful in the first place. Without HybridSFT, the gate has no supervision signal to learn from.</p>
+        <p>The second pass is <strong>HybridRL</strong>: run the agent on tasks with verifiable rewards (math, search, code execution, agentic benchmarks) and learn a policy over when to surface. The RL reward is shaped to penalize surface text, so the agent learns to surface only when surfacing actually helps, and stay latent everywhere else. The paper reports that HybridRL alone, without HybridSFT, fails to learn the gate, because the gate's output is random at initialization and there is no learning signal to attach RL to.[1]</p>
+        <div class="why"><b>why this matters</b><p>The two-stage recipe is a hint about how to graft latent reasoning onto any agent. First, bootstrap with distillation. Then, sharpen the routing with RL. The order is non-negotiable: RL on top of a gate that has never seen good behavior is just random search over surfacing strategies.</p></div>
+      </div>
+      <div class="diagram-shell">
+        <svg viewBox="0 0 480 320" role="img" aria-labelledby="t6 d6">
+          <title id="t6">HybridSFT and HybridRL two-stage training</title>
+          <desc id="d6">A pipeline of three blocks. Left: a text teacher produces traces. Middle: HybridSFT distills those traces into a hybrid student, teaching the gate to fire at sensible points. Right: HybridRL sharpens the gate by rewarding the agent on verifiable tasks, with a penalty for unnecessary surface text.</desc>
+          <text class="diagram-title" x="20" y="22">two-stage post-training  ·  distill, then sharpen</text>
+
+          <g>
+            <!-- teacher block -->
+            <g transform="translate(20,80)">
+              <rect x="0" y="0" width="120" height="160" rx="10" style="fill:var(--bg-card);stroke:var(--border);stroke-width:1.2"/>
+              <text x="60" y="22" text-anchor="middle" style="font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:0.08em;fill:var(--fg-soft)">TEXT TEACHER</text>
+              <g>
+                <rect x="14" y="38" width="92" height="14" rx="3" style="fill:var(--accent-soft);stroke:var(--accent);stroke-width:.8">
+                  <animate attributeName="opacity" from="0" to="1" dur=".3s" begin="0.2s" fill="freeze"/>
+                </rect>
+                <rect x="14" y="58" width="92" height="14" rx="3" style="fill:var(--accent-soft);stroke:var(--accent);stroke-width:.8">
+                  <animate attributeName="opacity" from="0" to="1" dur=".3s" begin="0.3s" fill="freeze"/>
+                </rect>
+                <rect x="14" y="78" width="92" height="14" rx="3" style="fill:var(--accent-soft);stroke:var(--accent);stroke-width:.8">
+                  <animate attributeName="opacity" from="0" to="1" dur=".3s" begin="0.4s" fill="freeze"/>
+                </rect>
+                <rect x="14" y="98" width="92" height="14" rx="3" style="fill:var(--accent-soft);stroke:var(--accent);stroke-width:.8">
+                  <animate attributeName="opacity" from="0" to="1" dur=".3s" begin="0.5s" fill="freeze"/>
+                </rect>
+                <rect x="14" y="118" width="92" height="14" rx="3" style="fill:var(--accent-soft);stroke:var(--accent);stroke-width:.8">
+                  <animate attributeName="opacity" from="0" to="1" dur=".3s" begin="0.6s" fill="freeze"/>
+                </rect>
+              </g>
+              <text x="60" y="148" text-anchor="middle" style="font-family:'JetBrains Mono',monospace;font-size:9px;fill:var(--fg-mute)">successful agent traces</text>
+            </g>
+
+            <!-- arrow -->
+            <line x1="140" y1="160" x2="180" y2="160" style="stroke:var(--fg-soft);stroke-width:1.4;fill:none">
+              <animate attributeName="stroke-dashoffset" from="0" to="-12" dur="1s" repeatCount="indefinite"/>
+            </line>
+
+            <!-- HybridSFT -->
+            <g transform="translate(180,80)">
+              <rect x="0" y="0" width="120" height="160" rx="10" style="fill:var(--accent-soft);stroke:var(--accent);stroke-width:1.4"/>
+              <text x="60" y="22" text-anchor="middle" style="font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:0.08em;fill:var(--accent-2);font-weight:700">HybridSFT</text>
+              <g>
+                <rect x="14" y="38" width="92" height="14" rx="3" style="fill:var(--bg-card);stroke:var(--border);stroke-width:.8">
+                  <animate attributeName="opacity" from="0" to="1" dur=".3s" begin="0.4s" fill="freeze"/>
+                </rect>
+                <rect x="14" y="58" width="92" height="14" rx="3" style="fill:var(--accent);stroke:var(--accent-2);stroke-width:.8">
+                  <animate attributeName="opacity" from="0" to="1" dur=".3s" begin="0.5s" fill="freeze"/>
+                </rect>
+                <rect x="14" y="78" width="92" height="14" rx="3" style="fill:var(--bg-card);stroke:var(--border);stroke-width:.8">
+                  <animate attributeName="opacity" from="0" to="1" dur=".3s" begin="0.6s" fill="freeze"/>
+                </rect>
+                <rect x="14" y="98" width="92" height="14" rx="3" style="fill:var(--bg-card);stroke:var(--border);stroke-width:.8">
+                  <animate attributeName="opacity" from="0" to="1" dur=".3s" begin="0.7s" fill="freeze"/>
+                </rect>
+                <rect x="14" y="118" width="92" height="14" rx="3" style="fill:var(--accent);stroke:var(--accent-2);stroke-width:.8">
+                  <animate attributeName="opacity" from="0" to="1" dur=".3s" begin="0.8s" fill="freeze"/>
+                </rect>
+              </g>
+              <text x="60" y="148" text-anchor="middle" style="font-family:'JetBrains Mono',monospace;font-size:9px;fill:var(--fg-mute)">distill, replace text</text>
+            </g>
+
+            <line x1="300" y1="160" x2="340" y2="160" style="stroke:var(--fg-soft);stroke-width:1.4;fill:none">
+              <animate attributeName="stroke-dashoffset" from="0" to="-12" dur="1s" repeatCount="indefinite"/>
+            </line>
+
+            <!-- HybridRL -->
+            <g transform="translate(340,80)">
+              <rect x="0" y="0" width="120" height="160" rx="10" style="fill:var(--bg-card);stroke:var(--accent);stroke-width:1.4"/>
+              <text x="60" y="22" text-anchor="middle" style="font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:0.08em;fill:var(--accent-2);font-weight:700">HybridRL</text>
+              <g>
+                <text x="60" y="48" text-anchor="middle" style="font-family:'JetBrains Mono',monospace;font-size:10px;fill:var(--fg-soft)">+ reward</text>
+                <text x="60" y="64" text-anchor="middle" style="font-family:'JetBrains Mono',monospace;font-size:10px;fill:var(--fg-soft)">- surface cost</text>
+                <line x1="20" y1="76" x2="100" y2="76" style="stroke:var(--border);stroke-width:1"/>
+                <text x="60" y="96" text-anchor="middle" style="font-family:'JetBrains Mono',monospace;font-size:10px;fill:var(--fg-soft)">learn when</text>
+                <text x="60" y="112" text-anchor="middle" style="font-family:'JetBrains Mono',monospace;font-size:10px;fill:var(--fg-soft)">to surface</text>
+              </g>
+              <text x="60" y="148" text-anchor="middle" style="font-family:'JetBrains Mono',monospace;font-size:9px;fill:var(--fg-mute)">verifiable tasks</text>
+            </g>
+          </g>
+
+          <text x="20" y="280" style="font-family:'JetBrains Mono',monospace;font-size:10px;fill:var(--fg-mute)">order is non-negotiable: SFT bootstraps the gate, RL sharpens it.</text>
+        </svg>
+        <p class="diagram-caption"><span class="num">FIG 6</span>HybridSFT replaces blocks of internal text in the teacher's trace with continuous thoughts, training the student to match the teacher's surface outputs and to keep its hidden state aligned with the teacher would have had. HybridRL then runs the hybrid agent on tasks with verifiable rewards, with a penalty for surface text, to learn a routing policy.</p>
+      </div>
+    </div>
+
+    <!-- 6 -->
+    <div class="walk">
+      <div class="copy">
+        <h3>6. The numbers, plainly stated.</h3>
+        <p>The paper reports results on 11 benchmarks across math, science, medicine, search, and agentic reasoning, at three model scales. HybridAgent beats frontier text-only agents and frontier latent-only agents on average, with the gap growing as the backbone gets larger.[1] On the same base model, hybrid gives 10.4 percent higher accuracy than a text-only ReAct agent, 35.5 to 54.7 percent fewer tokens, 1.8 to 2.6 times faster inference, and 2.7 to 3.7 times lower cost.[1]</p>
+        <p>The token reduction is the part that should change how you think about agent cost models. A 50 percent token cut is not an optimization, it is a regime shift. The model is doing half the work of a text agent to get a better answer, and most of that work is being done in the medium where it is cheapest per step. The cost is paid in storage, not in compute.</p>
+        <p>The bigger question is the trajectory. If a 7B hybrid matches a 13B text agent on these benchmarks, then the cost curve for tool-using agents just bent. You stop paying the text-agent tax for every internal step, and the marginal cost of a tool-using model drops toward the marginal cost of a non-tool-using one.</p>
+        <div class="why"><b>why this matters</b><p>For architects building production agents, the actionable question is not "should I switch to a hybrid today." It is "how much of my agent's cost is the internal monologue, and would a continuous-thought mode amortize the post-training." If the monologue is more than a third of your tokens, the answer is yes.</p></div>
+      </div>
+      <div class="diagram-shell">
+        <svg viewBox="0 0 480 320" role="img" aria-labelledby="t7 d7">
+          <title id="t7">Hybrid vs text agent on the same backbone</title>
+          <desc id="d7">A horizontal bar chart with four pairs of bars. Each pair compares a text-only ReAct baseline to the hybrid on the same backbone. Bars are tokens consumed (lower is better), accuracy (higher is better), latency (lower is better), and cost (lower is better).</desc>
+          <text class="diagram-title" x="20" y="22">hybrid vs. text-only ReAct  ·  same backbone</text>
+
+          <g transform="translate(40,60)" style="font-family:'JetBrains Mono',monospace;font-size:10px">
+            <!-- pairs -->
+            <g transform="translate(0,0)">
+              <text x="0" y="0" style="fill:var(--fg-soft)">tokens used</text>
+              <rect x="0" y="8" width="360" height="14" rx="3" style="fill:var(--bg-soft);stroke:var(--border);stroke-width:.6">
+                <animate attributeName="opacity" from="0" to="1" dur=".4s" begin="0.2s" fill="freeze"/>
+              </rect>
+              <rect x="0" y="8" width="200" height="14" rx="3" style="fill:var(--fg-mute);opacity:.7">
+                <animate attributeName="width" from="360" to="200" dur=".6s" begin="0.4s" fill="freeze"/>
+              </rect>
+              <rect x="0" y="8" width="100" height="14" rx="3" style="fill:var(--accent)">
+                <animate attributeName="width" from="360" to="100" dur=".6s" begin="0.6s" fill="freeze"/>
+              </rect>
+              <text x="208" y="19" style="fill:var(--fg-mute)">-44%</text>
+            </g>
+
+            <g transform="translate(0,40)">
+              <text x="0" y="0" style="fill:var(--fg-soft)">accuracy</text>
+              <rect x="0" y="8" width="360" height="14" rx="3" style="fill:var(--bg-soft);stroke:var(--border);stroke-width:.6">
+                <animate attributeName="opacity" from="0" to="1" dur=".4s" begin="0.4s" fill="freeze"/>
+              </rect>
+              <rect x="0" y="8" width="220" height="14" rx="3" style="fill:var(--fg-mute);opacity:.7">
+                <animate attributeName="width" from="0" to="220" dur=".6s" begin="0.6s" fill="freeze"/>
+              </rect>
+              <rect x="0" y="8" width="248" height="14" rx="3" style="fill:var(--accent)">
+                <animate attributeName="width" from="0" to="248" dur=".6s" begin="0.8s" fill="freeze"/>
+              </rect>
+              <text x="256" y="19" style="fill:var(--fg-soft)">+10.4%</text>
+            </g>
+
+            <g transform="translate(0,80)">
+              <text x="0" y="0" style="fill:var(--fg-soft)">latency (inverse)</text>
+              <rect x="0" y="8" width="360" height="14" rx="3" style="fill:var(--bg-soft);stroke:var(--border);stroke-width:.6">
+                <animate attributeName="opacity" from="0" to="1" dur=".4s" begin="0.6s" fill="freeze"/>
+              </rect>
+              <rect x="0" y="8" width="140" height="14" rx="3" style="fill:var(--fg-mute);opacity:.7">
+                <animate attributeName="width" from="0" to="140" dur=".6s" begin="0.8s" fill="freeze"/>
+              </rect>
+              <rect x="0" y="8" width="220" height="14" rx="3" style="fill:var(--accent)">
+                <animate attributeName="width" from="0" to="220" dur=".6s" begin="1.0s" fill="freeze"/>
+              </rect>
+              <text x="228" y="19" style="fill:var(--fg-soft)">2.2x faster</text>
+            </g>
+
+            <g transform="translate(0,120)">
+              <text x="0" y="0" style="fill:var(--fg-soft)">cost</text>
+              <rect x="0" y="8" width="360" height="14" rx="3" style="fill:var(--bg-soft);stroke:var(--border);stroke-width:.6">
+                <animate attributeName="opacity" from="0" to="1" dur=".4s" begin="0.8s" fill="freeze"/>
+              </rect>
+              <rect x="0" y="8" width="120" height="14" rx="3" style="fill:var(--fg-mute);opacity:.7">
+                <animate attributeName="width" from="0" to="120" dur=".6s" begin="1.0s" fill="freeze"/>
+              </rect>
+              <rect x="0" y="8" width="100" height="14" rx="3" style="fill:var(--accent)">
+                <animate attributeName="width" from="0" to="100" dur=".6s" begin="1.2s" fill="freeze"/>
+              </rect>
+              <text x="128" y="19" style="fill:var(--fg-soft)">3.2x cheaper</text>
+            </g>
+          </g>
+
+          <g transform="translate(20,200)">
+            <rect x="0" y="0" width="14" height="14" rx="2" style="fill:var(--fg-mute);opacity:.7"/>
+            <text x="22" y="11" style="font-family:'JetBrains Mono',monospace;font-size:10px;fill:var(--fg-soft)">text-only ReAct (baseline)</text>
+            <rect x="220" y="0" width="14" height="14" rx="2" style="fill:var(--accent)"/>
+            <text x="242" y="11" style="font-family:'JetBrains Mono',monospace;font-size:10px;fill:var(--fg-soft)">HybridAgent (same model)</text>
+          </g>
+          <text x="20" y="240" style="font-family:'JetBrains Mono',monospace;font-size:10px;fill:var(--fg-mute)">averaged over 11 benchmarks, three model scales (Zou et al. 2026).</text>
+        </svg>
+        <p class="diagram-caption"><span class="num">FIG 7</span>All four bars on the same backbone, averaged across the paper's benchmarks. The hybrid uses fewer tokens, is more accurate, runs in less wall-clock time, and costs a fraction of the text agent. The accuracy and cost improvements are not coupled: you can stop earlier and still beat the text baseline.</p>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<section id="confusions">
+  <div class="wrap">
+    <div class="eyebrow-row"><span class="label">Common confusions</span><span class="line"></span></div>
+    <h2>Four things <span class="accent">people get wrong</span> on the first read.</h2>
+    <p class="lede">If you remember anything from the previous discussion of agent design, these are the parts to update.</p>
+
+    <div class="confusions">
+      <div class="conf">
+        <span class="num">01</span>
+        <p class="wrong">"Latent reasoning is just a faster text agent, so this is an inference trick."</p>
+        <p class="right">It is a generation-format change, not a serving optimization. The model is trained to produce continuous thought vectors as part of its output distribution. You cannot get the same numbers by speeding up a ReAct agent at serving time, because the savings come from never producing the text in the first place.</p>
+      </div>
+      <div class="conf">
+        <span class="num">02</span>
+        <p class="wrong">"The hybrid is just Coconut with a tool call."</p>
+        <p class="right">Coconut is latent-only. The paper is the first to make latent reasoning and tool use compatible in a single trained model. The HybridLink gate, the lossless working memory, and the two-stage post-training are the parts that did not exist before, and each of them is load-bearing.</p>
+      </div>
+      <div class="conf">
+        <span class="num">03</span>
+        <p class="wrong">"You need a giant model to do continuous thought well."</p>
+        <p class="right">The paper reports results at three model scales and the relative gains hold at the smallest one. A 3B hybrid can match a 7B text agent on the benchmarks the paper measures. The continuous thought format helps small models because it gives them more capacity per token than a chain of thought would.</p>
+      </div>
+      <div class="conf">
+        <span class="num">04</span>
+        <p class="wrong">"Latent thoughts are black boxes, so this is less interpretable than a text agent."</p>
+        <p class="right">Continuous thoughts can be projected through the unembedding matrix back to the vocabulary, which gives a nearest-token readout at every step. The paper uses this to show the latent reasoning is structured (it picks out intermediate answer candidates, plan revisions, and self-checks). It is more inspectable than a chain of thought, not less, because you can probe the model mid-thought.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="next">
+  <div class="wrap">
+    <div class="eyebrow-row"><span class="label">Where to go next</span><span class="line"></span></div>
+    <h2>Three specific followups. <span class="accent">No "read the docs."</span></h2>
+    <p class="lede">Pick one. Spend an evening on it.</p>
+
+    <div class="next">
+      <a class="tile" href="https://arxiv.org/abs/2610.18861" target="_blank" rel="noopener">
+        <span class="kind">paper</span>
+        <span class="name">Hybrid Reasoning Agents (Zou et al. 2026)</span>
+        <p class="desc">The actual paper. 22 pages, well-written, with a clean architecture diagram and ablations on every component. Read sections 3 and 4 for the model and the training recipe.</p>
+      </a>
+      <a class="tile" href="https://github.com/togethercomputer/HybridAgent" target="_blank" rel="noopener">
+        <span class="kind">code</span>
+        <span class="name">HybridAgent on GitHub (Together AI)</span>
+        <p class="desc">The reference implementation from the authors. Run the inference loop on a small backbone and watch the gate's decisions print out at every step.</p>
+      </a>
+      <a class="tile" href="https://arxiv.org/abs/2403.09629" target="_blank" rel="noopener">
+        <span class="kind">background</span>
+        <span class="name">Quiet-STaR (Zelikman et al. 2024)</span>
+        <p class="desc">The earlier paper that showed a model can learn to insert continuous thoughts between every text token. Read it to see what "think before you speak" looked like before the hybrid came along.[4]</p>
+      </a>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap inner">
+    <div class="mono">Day 23 of the daily explainer series. Built by Hermes using the explainer-builder skill.</div>
+    <div class="mono">Sources: [1] Zou et al. 2026 (arXiv 2610.18861) &middot; [2] HN discussion (50145337) &middot; [3] HybridAgent repo (Together AI) &middot; [4] Zelikman et al. 2024 (arXiv 2403.09629).</div>
+  </div>
+</footer>
+
+<script>
+  (function(){
+    const btn = document.getElementById('themeToggle');
+    if(btn){
+      btn.addEventListener('click', function(){
+        const cur = document.documentElement.getAttribute('data-theme');
+        const next = cur === 'dark' ? 'light' : 'dark';
+        document.documentElement.setAttribute('data-theme', next);
+        try{ localStorage.setItem('theme', next); }catch(e){}
+      });
+    }
+  })();
+</script>
+
+</body>
+</html>
