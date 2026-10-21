@@ -1,0 +1,981 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Harness²: an agent that rewrites its own scaffolding</title>
+<meta name="description" content="How Google's Harness² makes a coding agent improve its own harness (prompts, tools, memory, skills) at test time, with no labels and no weight updates.">
+<script>
+  // Pre-paint theme boot: must run before the stylesheet so dark mode never flashes light.
+  (function () {
+    try {
+      var t = localStorage.getItem('theme');
+      if (t === 'dark' || t === 'light') document.documentElement.setAttribute('data-theme', t);
+    } catch (e) {}
+  })();
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --paper: #ffffff;
+    --ink: #0d0d0d;
+    --ink-2: #2b2b2b;
+    --muted: #6b6b6b;
+    --faint: #9a9a9a;
+    --line: rgba(13, 13, 13, 0.08);
+    --line-strong: rgba(13, 13, 13, 0.14);
+    --surface: rgba(13, 13, 13, 0.03);
+    --surface-2: rgba(13, 13, 13, 0.05);
+    --brand: #18e299;
+    --brand-ink: #0a7a4f;
+    --brand-wash: rgba(24, 226, 153, 0.12);
+    --warn: #d9822b;
+    --violet: #7c6cf0;
+    --hero-1: rgba(24, 226, 153, 0.16);
+    --hero-2: rgba(24, 226, 153, 0.02);
+    --shadow: 0 1px 2px rgba(13, 13, 13, 0.04), 0 8px 24px rgba(13, 13, 13, 0.05);
+  }
+  [data-theme="dark"] {
+    --paper: #08090a;
+    --ink: #f4f5f6;
+    --ink-2: #d8dadc;
+    --muted: #9ba0a6;
+    --faint: #6f757c;
+    --line: rgba(255, 255, 255, 0.10);
+    --line-strong: rgba(255, 255, 255, 0.18);
+    --surface: rgba(255, 255, 255, 0.04);
+    --surface-2: rgba(255, 255, 255, 0.07);
+    --brand: #2af5a8;
+    --brand-ink: #2af5a8;
+    --brand-wash: rgba(42, 245, 168, 0.14);
+    --warn: #f0a95c;
+    --violet: #9a8cff;
+    --hero-1: rgba(42, 245, 168, 0.14);
+    --hero-2: rgba(42, 245, 168, 0.015);
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px rgba(0, 0, 0, 0.35);
+  }
+  @media (prefers-color-scheme: dark) {
+    [data-theme="light"] {
+      --paper: #08090a; --ink: #f4f5f6; --ink-2: #d8dadc; --muted: #9ba0a6; --faint: #6f757c;
+      --line: rgba(255,255,255,0.10); --line-strong: rgba(255,255,255,0.18);
+      --surface: rgba(255,255,255,0.04); --surface-2: rgba(255,255,255,0.07);
+      --brand: #2af5a8; --brand-ink: #2af5a8; --brand-wash: rgba(42,245,168,0.14);
+      --warn: #f0a95c; --violet: #9a8cff;
+      --hero-1: rgba(42,245,168,0.14); --hero-2: rgba(42,245,168,0.015);
+      --shadow: 0 1px 2px rgba(0,0,0,0.4), 0 8px 24px rgba(0,0,0,0.35);
+    }
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 17px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    transition: background-color .25s ease, color .25s ease;
+  }
+  .mono { font-family: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace; }
+  code {
+    font-family: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: .875em;
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    border-radius: 5px;
+    padding: .1em .35em;
+  }
+  .wrap { max-width: 1200px; margin: 0 auto; padding: 0 24px; }
+
+  /* nav */
+  nav.top {
+    position: sticky; top: 0; z-index: 50;
+    background: color-mix(in srgb, var(--paper) 86%, transparent);
+    backdrop-filter: saturate(180%) blur(12px);
+    border-bottom: 1px solid var(--line);
+  }
+  nav.top .wrap { display: flex; align-items: center; justify-content: space-between; height: 60px; }
+  .brand { font-weight: 600; font-size: 15px; letter-spacing: -0.01em; display: flex; align-items: center; gap: 9px; white-space: nowrap; }
+  .brand-dot { width: 8px; height: 8px; border-radius: 9999px; background: var(--brand); }
+  .navlinks { display: flex; gap: 4px; align-items: center; }
+  .navlinks a {
+    color: var(--muted); text-decoration: none; font-size: 14px;
+    padding: 6px 11px; border-radius: 9999px; transition: color .18s, background .18s;
+  }
+  .navlinks a:hover { color: var(--ink); background: var(--surface-2); }
+  .navlinks a:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+  @media (max-width: 860px) { .navlinks a.hide-sm { display: none; } }
+  #themeBtn {
+    width: 34px; height: 34px; border-radius: 9999px; cursor: pointer;
+    border: 1px solid var(--line-strong); background: var(--surface);
+    color: var(--ink); display: grid; place-items: center; font-size: 14px;
+    transition: background .18s, border-color .18s;
+  }
+  #themeBtn:hover { background: var(--surface-2); border-color: var(--brand); }
+  #themeBtn:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+
+  /* hero */
+  .hero { position: relative; padding: 96px 0 72px; overflow: hidden; text-align: center; }
+  .hero::before {
+    content: ""; position: absolute; inset: -40% -10% auto -10%; height: 620px; z-index: 0;
+    background: radial-gradient(60% 55% at 50% 42%, var(--hero-1) 0%, var(--hero-2) 62%, transparent 78%);
+    pointer-events: none;
+  }
+  .hero .wrap { position: relative; z-index: 1; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-family: "Geist Mono", monospace; font-size: 11px; letter-spacing: .12em; text-transform: uppercase;
+    color: var(--brand-ink); background: var(--brand-wash);
+    border: 1px solid color-mix(in srgb, var(--brand) 35%, transparent);
+    border-radius: 9999px; padding: 6px 14px; margin-bottom: 26px;
+  }
+  h1 {
+    font-size: 64px; line-height: 1.05; letter-spacing: -0.035em; font-weight: 700;
+    margin: 0 0 20px; max-width: 15ch; margin-inline: auto; text-wrap: balance;
+  }
+  h1 em { font-style: normal; color: var(--brand-ink); }
+  .tagline { font-size: 20px; color: var(--muted); max-width: 60ch; margin: 0 auto 40px; text-wrap: pretty; }
+  .gets {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px;
+    max-width: 940px; margin: 0 auto; text-align: left;
+  }
+  @media (max-width: 760px) { .gets { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 460px) { .gets { grid-template-columns: 1fr; } }
+  .get {
+    background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
+    padding: 14px 16px; font-size: 14px; color: var(--ink-2); line-height: 1.45;
+  }
+  .get b { display: block; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); font-family: "Geist Mono", monospace; font-weight: 500; margin-bottom: 5px; }
+
+  /* sections */
+  section { padding: 72px 0; border-top: 1px solid var(--line); }
+  section.untitled { border-top: none; padding-top: 56px; }
+  h2 { font-size: 40px; line-height: 1.15; letter-spacing: -0.028em; font-weight: 700; margin: 12px 0 8px; }
+  h3 { font-size: 22px; letter-spacing: -0.015em; font-weight: 600; margin: 0 0 12px; }
+  .tag {
+    font-family: "Geist Mono", monospace; font-size: 11px; letter-spacing: .14em;
+    text-transform: uppercase; color: var(--brand-ink);
+  }
+  .lede { font-size: 19px; color: var(--ink-2); max-width: 70ch; margin: 0 0 36px; text-wrap: pretty; }
+  p { max-width: 72ch; margin: 0 0 18px; color: var(--ink-2); text-wrap: pretty; }
+  p.tight { margin-bottom: 12px; }
+  .center { max-width: 720px; margin-inline: auto; }
+
+  /* one-sentence model */
+  .model {
+    border: 1px solid color-mix(in srgb, var(--brand) 40%, transparent);
+    background: var(--brand-wash);
+    border-radius: 16px; padding: 30px 32px; max-width: 860px;
+  }
+  .model p { font-size: 21px; line-height: 1.5; color: var(--ink); margin: 0; max-width: none; font-weight: 500; }
+
+  /* figures */
+  figure { margin: 40px 0; }
+  figure.wide { max-width: 940px; margin-inline: auto; }
+  figure.inline { max-width: 760px; margin: 28px 0; }
+  figure.inline svg { width: 100%; height: auto; }
+  .figcap { font-size: 14px; color: var(--muted); margin-top: 14px; text-align: center; }
+  .figcap .lbl { font-family: "Geist Mono", monospace; font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--brand-ink); margin-right: 8px; }
+
+  /* why-matters */
+  .why {
+    border-left: 2px solid var(--brand);
+    background: var(--surface); border-radius: 0 10px 10px 0;
+    padding: 18px 22px; max-width: 720px; margin: 24px 0 0;
+  }
+  .why .lbl {
+    font-family: "Geist Mono", monospace; font-size: 11px; letter-spacing: .13em;
+    text-transform: uppercase; color: var(--brand-ink); display: block; margin-bottom: 7px;
+  }
+  .why p { margin: 0; font-size: 15.5px; color: var(--ink-2); max-width: none; }
+
+  /* walkthrough grid */
+  .step { margin: 0 0 68px; }
+  .stephead { display: flex; align-items: baseline; gap: 14px; margin-bottom: 6px; flex-wrap: wrap; }
+  .stepnum {
+    font-family: "Geist Mono", monospace; font-size: 13px; color: var(--brand-ink);
+    border: 1px solid color-mix(in srgb, var(--brand) 40%, transparent);
+    border-radius: 9999px; padding: 3px 11px; background: var(--brand-wash);
+  }
+
+  /* confusion cards */
+  .cards { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; max-width: 1000px; }
+  @media (max-width: 760px) { .cards { grid-template-columns: 1fr; } }
+  .card {
+    background: var(--surface); border: 1px solid var(--line); border-radius: 14px;
+    padding: 22px 24px;
+  }
+  .card .n {
+    font-family: "Geist Mono", monospace; font-size: 12px; color: var(--muted);
+    letter-spacing: .1em; margin-bottom: 10px;
+  }
+  .card h4 { margin: 0 0 10px; font-size: 17px; font-weight: 600; letter-spacing: -0.01em; line-height: 1.35; }
+  .card .wrong { font-size: 15px; color: var(--muted); margin: 0 0 12px; }
+  .card .right { font-size: 15px; color: var(--ink-2); margin: 0; padding-top: 12px; border-top: 1px solid var(--line); }
+  .card .right b { color: var(--brand-ink); font-weight: 600; }
+
+  /* next links */
+  .next { display: grid; gap: 12px; max-width: 760px; }
+  .next a {
+    display: flex; gap: 16px; align-items: flex-start; text-decoration: none; color: inherit;
+    background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
+    padding: 18px 22px; transition: border-color .18s, transform .18s;
+  }
+  .next a:hover { border-color: var(--brand); transform: translateY(-1px); }
+  .next a:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+  .next .k {
+    font-family: "Geist Mono", monospace; font-size: 11px; letter-spacing: .12em; text-transform: uppercase;
+    color: var(--brand-ink); min-width: 74px; padding-top: 3px;
+  }
+  .next .t { font-size: 16px; font-weight: 500; color: var(--ink); }
+  .next .d { font-size: 14px; color: var(--muted); margin-top: 3px; }
+
+  /* citations */
+  .srcs { font-size: 14px; color: var(--muted); }
+  .srcs ol { padding-left: 20px; }
+  .srcs li { margin-bottom: 8px; }
+  .srcs a { color: var(--brand-ink); text-decoration: none; border-bottom: 1px solid color-mix(in srgb, var(--brand) 40%, transparent); }
+  .srcs a:hover { border-bottom-color: var(--brand); }
+  sup.c { font-family: "Geist Mono", monospace; font-size: 11px; color: var(--brand-ink); }
+
+  footer { border-top: 1px solid var(--line); padding: 34px 0 60px; }
+  footer p { font-size: 14px; color: var(--faint); margin: 0; }
+
+  /* animation */
+  @keyframes flowdash { to { stroke-dashoffset: -46; } }
+  @keyframes pulseRing { 0%,100% { opacity: .28; } 50% { opacity: .85; } }
+  @keyframes breathe { 0%,100% { opacity: .55; } 50% { opacity: 1; } }
+  @keyframes growBar { from { transform: scaleY(0.08); } to { transform: scaleY(1); } }
+  @keyframes sweepX { 0% { transform: translateX(-100%); } 100% { transform: translateX(200%); } }
+  @keyframes nodepop { 0%,72%,100% { opacity: .38; } 8%,60% { opacity: 1; } }
+  @keyframes loopSpin { to { transform: rotate(360deg); } }
+  .dash { animation: flowdash 1.5s linear infinite; }
+  .pulse { animation: pulseRing 2.4s ease-in-out infinite; }
+  .breathe { animation: breathe 3s ease-in-out infinite; }
+  .bar { transform-origin: bottom; animation: growBar 1.5s cubic-bezier(.2,.7,.3,1) both; }
+  .bar:nth-child(2) { animation-delay: .12s; }
+  .bar:nth-child(3) { animation-delay: .24s; }
+  .bar:nth-child(4) { animation-delay: .36s; }
+  .bar:nth-child(5) { animation-delay: .48s; }
+  .node { animation: nodepop 5.5s ease-in-out infinite; }
+  .spin { transform-origin: center; animation: loopSpin 9s linear infinite; }
+
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    *, *::before, *::after {
+      animation-duration: .001ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: .001ms !important;
+    }
+    .dash { stroke-dashoffset: 0; }
+    .node { opacity: 1; }
+    .bar { transform: scaleY(1); }
+    .spin { transform: none; }
+  }
+
+  @media (max-width: 720px) {
+    body { font-size: 16px; }
+    h1 { font-size: 44px; }
+    h2 { font-size: 32px; }
+    .hero { padding: 64px 0 52px; }
+    section { padding: 56px 0; }
+    .model { padding: 22px; }
+    .model p { font-size: 18px; }
+  }
+</style>
+</head>
+<body>
+
+<nav class="top">
+  <div class="wrap">
+    <div class="brand"><span class="brand-dot"></span> Day 24 explainer</div>
+    <div class="navlinks">
+      <a href="#model" class="hide-sm">Model</a>
+      <a href="#walk">Walkthrough</a>
+      <a href="#confusions">Confusions</a>
+      <button id="themeBtn" aria-label="Toggle dark mode" title="Toggle theme">◐</button>
+    </div>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="wrap">
+    <div class="chip">Recursive self-improvement · agent infrastructure</div>
+    <h1>An agent that rewrites its own <em>scaffolding</em></h1>
+    <p class="tagline">
+      Harness² treats the prompts, tools, memory and skills around a frozen model as the thing to optimize,
+      and shows you how it does that at test time with no labels and no weight updates.
+    </p>
+    <div class="gets">
+      <div class="get"><b>The two loops</b>Task-level versus harnessing-level recursion, and why the second one is the interesting part.</div>
+      <div class="get"><b>The trick</b>Propose-Probe-Compose, a way to learn from edits when nobody can tell you if the output was right.</div>
+      <div class="get"><b>The numbers</b>72.4 to 80.8 on WorkBuddy with the same model and the same starting harness.</div>
+      <div class="get"><b>The seams</b>Where it breaks: selector mistakes, wrong premises spreading across candidates, and the cost.</div>
+    </div>
+  </div>
+</header>
+
+<section class="untitled" id="model">
+  <div class="wrap">
+    <div class="model">
+      <p>
+        Harness² keeps the model frozen and rewrites the harness around it, learning which edit helped by
+        comparing how the same task behaved with and without that edit, then writes down the lesson so the next
+        task starts smarter.
+      </p>
+    </div>
+  </div>
+</section>
+
+<section id="diagram">
+  <div class="wrap">
+    <div class="center">
+      <div class="tag">The mental model</div>
+      <h2>Two things improve, not one</h2>
+      <p class="lede">
+        Most agent improvement stops at the first loop: make this task better. Harness² adds a second loop
+        underneath it that gets better at making the first loop work. The star is on the outer one.
+      </p>
+    </div>
+
+    <figure class="wide">
+      <svg viewBox="0 0 900 520" role="img" aria-labelledby="heroT heroD">
+        <title id="heroT">The Harness2 two-level recursion loop</title>
+        <desc id="heroD">
+          A frozen model sits inside an editable execution harness. Within one task, the improvement harness
+          proposes candidate harness edits, probes them against a reference execution, and composes a successor.
+          After the task, an experience reflector writes the adopted harness and evidence-backed lessons into a
+          library that updates the improvement harness for the next task.
+        </desc>
+        <defs>
+          <marker id="arw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" style="fill:var(--muted)"></path>
+          </marker>
+          <marker id="arwB" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" style="fill:var(--brand)"></path>
+          </marker>
+        </defs>
+
+        <!-- outer loop ring -->
+        <circle cx="450" cy="270" r="236" style="fill:none;stroke:var(--line-strong);stroke-width:1.5;stroke-dasharray:5 7"
+                class="spin" opacity="0.5">
+          <animateTransform attributeName="transform" type="rotate" from="0 450 270" to="360 450 270" dur="14s" repeatCount="indefinite"></animateTransform>
+        </circle>
+        <text x="450" y="22" text-anchor="middle" style="font-family:'Geist Mono',monospace;font-size:10.5px;letter-spacing:.14em;fill:var(--muted)">HARNESSING-LEVEL RECURSION · ACROSS TASKS</text>
+
+        <!-- improvement harness -->
+        <g>
+          <rect x="330" y="42" width="240" height="66" rx="12" style="fill:var(--surface-2);stroke:var(--brand);stroke-width:1.5"></rect>
+          <text x="450" y="70" text-anchor="middle" style="font-size:14px;font-weight:600;fill:var(--ink)">Improvement harness R</text>
+          <text x="450" y="90" text-anchor="middle" style="font-family:'Geist Mono',monospace;font-size:10.5px;fill:var(--muted)">library of harnesses + EXPERIENCE.md</text>
+        </g>
+        <line x1="450" y1="108" x2="450" y2="150" style="stroke:var(--muted);stroke-width:1.5;marker-end:url(#arw)"></line>
+
+        <!-- frozen model + harness -->
+        <g>
+          <rect x="286" y="156" width="328" height="74" rx="12" style="fill:var(--surface);stroke:var(--line-strong);stroke-width:1.5"></rect>
+          <rect x="302" y="172" width="112" height="42" rx="8" style="fill:var(--surface-2);stroke:var(--muted);stroke-width:1"></rect>
+          <text x="358" y="190" text-anchor="middle" style="font-size:11.5px;font-weight:600;fill:var(--muted)">Model M</text>
+          <text x="358" y="205" text-anchor="middle" style="font-family:'Geist Mono',monospace;font-size:9.5px;fill:var(--faint)">FROZEN</text>
+          <text x="426" y="190" style="font-size:15px;fill:var(--muted)">+</text>
+          <rect x="440" y="172" width="158" height="42" rx="8" style="fill:var(--brand-wash);stroke:var(--brand);stroke-width:1.2"></rect>
+          <text x="519" y="190" text-anchor="middle" style="font-size:11.5px;font-weight:600;fill:var(--ink)">Harness H</text>
+          <text x="519" y="205" text-anchor="middle" style="font-family:'Geist Mono',monospace;font-size:9.5px;fill:var(--brand-ink)">EDITABLE</text>
+        </g>
+        <line x1="450" y1="230" x2="450" y2="262" style="stroke:var(--muted);stroke-width:1.5;marker-end:url(#arw)"></line>
+        <text x="466" y="250" style="font-family:'Geist Mono',monospace;font-size:9.5px;fill:var(--faint)">executes</text>
+
+        <!-- pipeline: propose -> probe -> compose -->
+        <g>
+          <rect x="120" y="268" width="180" height="58" rx="11" style="fill:var(--surface);stroke:var(--line-strong);stroke-width:1.2"></rect>
+          <text x="210" y="292" text-anchor="middle" style="font-size:13px;font-weight:600;fill:var(--ink)">Propose</text>
+          <text x="210" y="309" text-anchor="middle" style="font-family:'Geist Mono',monospace;font-size:9.5px;fill:var(--muted)">invariant + domain</text>
+        </g>
+        <line x1="300" y1="297" x2="352" y2="297" style="stroke:var(--brand);stroke-width:1.6;marker-end:url(#arwB)"></line>
+        <g>
+          <rect x="360" y="268" width="180" height="58" rx="11" style="fill:var(--surface);stroke:var(--line-strong);stroke-width:1.2"></rect>
+          <text x="450" y="292" text-anchor="middle" style="font-size:13px;font-weight:600;fill:var(--ink)">Probe</text>
+          <text x="450" y="309" text-anchor="middle" style="font-family:'Geist Mono',monospace;font-size:9.5px;fill:var(--muted)">run on same task</text>
+        </g>
+        <line x1="540" y1="297" x2="592" y2="297" style="stroke:var(--brand);stroke-width:1.6;marker-end:url(#arwB)"></line>
+        <g>
+          <rect x="600" y="268" width="180" height="58" rx="11" style="fill:var(--surface);stroke:var(--line-strong);stroke-width:1.2"></rect>
+          <text x="690" y="292" text-anchor="middle" style="font-size:13px;font-weight:600;fill:var(--ink)">Compose</text>
+          <text x="690" y="309" text-anchor="middle" style="font-family:'Geist Mono',monospace;font-size:9.5px;fill:var(--muted)">successor H'</text>
+        </g>
+
+        <!-- reference branch -->
+        <g>
+          <rect x="238" y="352" width="424" height="40" rx="9" style="fill:var(--surface);stroke:var(--line);stroke-width:1"></rect>
+          <text x="450" y="377" text-anchor="middle" style="font-family:'Geist Mono',monospace;font-size:10px;fill:var(--muted)">reference execution e0 from base harness H0 · the contrast baseline</text>
+        </g>
+        <line x1="450" y1="326" x2="450" y2="348" style="stroke:var(--line-strong);stroke-width:1.2;stroke-dasharray:3 4"></line>
+        <line x1="330" y1="392" x2="330" y2="326" style="stroke:var(--muted);stroke-width:1.2;stroke-dasharray:3 4;marker-end:url(#arw)"></line>
+        <line x1="450" y1="392" x2="450" y2="326" style="stroke:var(--muted);stroke-width:1.2;stroke-dasharray:3 4;marker-end:url(#arw)"></line>
+
+        <!-- deliverable -->
+        <g>
+          <rect x="330" y="414" width="240" height="44" rx="10" style="fill:var(--brand-wash);stroke:var(--brand);stroke-width:1.4"></rect>
+          <text x="450" y="441" text-anchor="middle" style="font-size:13px;font-weight:600;fill:var(--ink)">deliverable y</text>
+        </g>
+        <line x1="450" y1="392" x2="450" y2="410" style="stroke:var(--brand);stroke-width:1.5;marker-end:url(#arwB)"></line>
+
+        <!-- reflect + library -->
+        <g>
+          <rect x="96" y="404" width="196" height="64" rx="11" style="fill:var(--surface-2);stroke:var(--violet);stroke-width:1.3"></rect>
+          <text x="194" y="428" text-anchor="middle" style="font-size:12.5px;font-weight:600;fill:var(--ink)">Reflect</text>
+          <text x="194" y="445" text-anchor="middle" style="font-family:'Geist Mono',monospace;font-size:9.5px;fill:var(--muted)">read full record D</text>
+          <text x="194" y="459" text-anchor="middle" style="font-family:'Geist Mono',monospace;font-size:9.5px;fill:var(--violet)">helped / hurt / confounded</text>
+        </g>
+        <line x1="330" y1="436" x2="296" y2="436" style="stroke:var(--violet);stroke-width:1.4;marker-end:url(#arw)"></line>
+
+        <!-- outer return path -->
+        <path d="M96,436 L58,436 L58,75 L326,75" style="fill:none;stroke:var(--brand);stroke-width:1.6;stroke-dasharray:6 5" class="dash"></path>
+        <path d="M326,75 L336,75 L331,70 L331,80 Z" style="fill:var(--brand)"></path>
+        <text x="66" y="256" transform="rotate(-90 66 256)" text-anchor="middle" style="font-family:'Geist Mono',monospace;font-size:9.5px;letter-spacing:.1em;fill:var(--brand-ink)">LIBRARY UPDATE · R(t) to R(t+1)</text>
+
+        <text x="450" y="492" text-anchor="middle" style="font-family:'Geist Mono',monospace;font-size:10px;letter-spacing:.12em;fill:var(--muted)">TASK-LEVEL RECURSION · WITHIN ONE TASK</text>
+      </svg>
+      <figcaption class="figcap"><span class="lbl">Fig 1</span>Task-level recursion sits inside harnessing-level recursion. The frozen model never moves.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<section id="walk">
+  <div class="wrap">
+    <div class="center">
+      <div class="tag">The walkthrough</div>
+      <h2>Six moves</h2>
+    </div>
+
+    <!-- 1 -->
+    <div class="step">
+      <div class="stephead"><span class="stepnum">01</span><h3>The thing being optimized is a folder, not a model</h3></div>
+      <p class="tight">
+        A harness is everything around the weights: the system prompt, guardrails, memory, skills, tool guidance,
+        scripts, subagents, and plugins. In Harness² each of those eight is a file mounted into the agent runtime.
+        The editors are told to treat them as editable source.
+      </p>
+      <p class="tight">
+        That framing is why no gradients appear anywhere in the paper. Nothing is trained. The unit of change is a
+        diff on a markdown file, and the unit of learning is an observation about what the agent did afterward.
+      </p>
+
+      <figure class="inline">
+        <svg viewBox="0 0 700 300" role="img" aria-label="The eight editable harness components grouped by runtime role">
+          <g style="font-size:11.5px;fill:var(--ink)">
+            <text x="150" y="30" text-anchor="middle" style="font-family:'Geist Mono',monospace;font-size:10px;letter-spacing:.12em;fill:var(--muted)">CONTEXT CONSTRUCTION</text>
+            <text x="350" y="30" text-anchor="middle" style="font-family:'Geist Mono',monospace;font-size:10px;letter-spacing:.12em;fill:var(--muted)">TOOL INTERFACE</text>
+            <text x="550" y="30" text-anchor="middle" style="font-family:'Geist Mono',monospace;font-size:10px;letter-spacing:.12em;fill:var(--muted)">ORCHESTRATION + MW</text>
+
+            <rect x="20" y="44" width="260" height="34" rx="8" class="node" style="fill:var(--surface);stroke:var(--line-strong);stroke-width:1"></rect>
+            <text x="34" y="66">C1 · systemprompt.md</text>
+            <rect x="20" y="86" width="260" height="34" rx="8" class="node" style="fill:var(--surface);stroke:var(--line-strong);stroke-width:1;animation-delay:.6s"></rect>
+            <text x="34" y="108">C2 · guardrails.md</text>
+            <rect x="20" y="128" width="260" height="34" rx="8" class="node" style="fill:var(--surface);stroke:var(--line-strong);stroke-width:1;animation-delay:1.2s"></rect>
+            <text x="34" y="150">C3 · memory</text>
+            <rect x="20" y="170" width="260" height="34" rx="8" class="node" style="fill:var(--surface);stroke:var(--line-strong);stroke-width:1;animation-delay:1.8s"></rect>
+            <text x="34" y="192">C6 · skills</text>
+
+            <rect x="320" y="44" width="260" height="34" rx="8" class="node" style="fill:var(--surface);stroke:var(--line-strong);stroke-width:1;animation-delay:.3s"></rect>
+            <text x="334" y="66">C4 · tool guidance</text>
+            <rect x="320" y="128" width="260" height="34" rx="8" class="node" style="fill:var(--surface);stroke:var(--line-strong);stroke-width:1;animation-delay:1.5s"></rect>
+            <text x="334" y="150">C7 · scripts</text>
+
+            <rect x="620" y="44" width="60" height="34" rx="8" class="node" style="fill:var(--surface);stroke:var(--line-strong);stroke-width:1;animation-delay:.9s"></rect>
+            <text x="650" y="66" text-anchor="middle">C5</text>
+            <text x="650" y="95" text-anchor="middle" style="font-size:11px;fill:var(--muted)">subagents</text>
+            <rect x="620" y="128" width="60" height="34" rx="8" class="node" style="fill:var(--surface);stroke:var(--line-strong);stroke-width:1;animation-delay:2.1s"></rect>
+            <text x="650" y="150" text-anchor="middle">C8</text>
+            <text x="650" y="179" text-anchor="middle" style="font-size:11px;fill:var(--muted)">plugins</text>
+
+            <!-- which component an observed failure points at -->
+            <g>
+              <rect x="20" y="216" width="660" height="26" rx="7" style="fill:var(--brand-wash);stroke:var(--brand);stroke-width:1.2"></rect>
+              <text x="350" y="234" text-anchor="middle" style="font-family:'Geist Mono',monospace;font-size:10.5px;fill:var(--brand-ink)">Agent = frozen model M + editable harness H = (c1 ... c8)</text>
+              <text x="350" y="264" text-anchor="middle" style="font-family:'Geist Mono',monospace;font-size:9.5px;fill:var(--faint)">the editor changes whichever component the observed failure lives in</text>
+              <circle cx="350" cy="258" r="3.5" style="fill:var(--warn)">
+                <animate attributeName="opacity" values="0.25;1;0.25" dur="3s" repeatCount="indefinite"></animate>
+              </circle>
+              <path d="M350,252 L350,244" style="fill:none;stroke:var(--warn);stroke-width:1.4;stroke-dasharray:4 4"></path>
+              <path d="M350,252 L436,182" style="fill:none;stroke:var(--warn);stroke-width:1.2;stroke-dasharray:3 5">
+                <animate attributeName="opacity" values="0.12;0.8;0.12" dur="3s" repeatCount="indefinite"></animate>
+              </path>
+              <path d="M350,252 L96,182" style="fill:none;stroke:var(--warn);stroke-width:1.2;stroke-dasharray:3 5">
+                <animate attributeName="opacity" values="0.12;0.8;0.12" dur="3s" begin="0.4s" repeatCount="indefinite"></animate>
+              </path>
+              <path d="M350,252 L558,196" style="fill:none;stroke:var(--warn);stroke-width:1.2;stroke-dasharray:3 5">
+                <animate attributeName="opacity" values="0.12;0.8;0.12" dur="3s" begin="0.8s" repeatCount="indefinite"></animate>
+              </path>
+              <circle cx="350" cy="252" r="11" style="fill:none;stroke:var(--warn);stroke-width:1">
+                <animate attributeName="r" values="8;18;8" dur="3s" repeatCount="indefinite"></animate>
+                <animate attributeName="opacity" values="0.6;0;0.6" dur="3s" repeatCount="indefinite"></animate>
+              </circle>
+            </g>
+
+          </g>
+        </svg>
+        <figcaption class="figcap"><span class="lbl">Fig 2</span>Eight components, four jobs. The improvement touches whichever one the failure lives in.</figcaption>
+      </figure>
+
+      <div class="why">
+        <span class="lbl">Why this matters</span>
+        <p>
+          You already own a harness. Whatever prompts, CLAUDE.md, skill files and scripts your agent runs on are
+          part of this scheme. The claim is that this layer is where the next large gains are, and that it is
+          editable by an agent at runtime without touching weights.
+        </p>
+      </div>
+    </div>
+
+    <!-- 2 -->
+    <div class="step">
+      <div class="stephead"><span class="stepnum">02</span><h3>The problem: nobody knows if the answer was right</h3></div>
+      <p class="tight">
+        Open-world tasks arrive without ground truth. There is no test to pass and no reference answer, so the
+        usual gradient-free self-improvement loop has nothing to climb. Prior work papers over this with proxy
+        signals, assumed answers, or pairwise output judging.
+      </p>
+      <p class="tight">
+        Harness² makes the honest move: it stops trying to score correctness. Instead it runs the task twice,
+        once with the current harness and once with an edited one, and reads the difference in behavior. The
+        question shifts from "was this right?" to "did this edit change what the agent did?".
+      </p>
+
+      <figure class="inline">
+        <svg viewBox="0 0 700 210" role="img" aria-label="A reference execution compared against two candidate executions">
+          <rect x="20" y="34" width="180" height="72" rx="11" style="fill:var(--surface);stroke:var(--line-strong);stroke-width:1.2"></rect>
+          <text x="110" y="60" text-anchor="middle" style="font-family:'Geist Mono',monospace;font-size:10px;fill:var(--muted)">REFERENCE</text>
+          <text x="110" y="80" text-anchor="middle" style="font-size:13px;font-weight:600;fill:var(--ink)">base H0</text>
+          <text x="110" y="97" text-anchor="middle" style="font-size:10.5px;fill:var(--faint)">ran tools as plain text</text>
+
+          <rect x="260" y="34" width="180" height="72" rx="11" style="fill:var(--surface);stroke:var(--violet);stroke-width:1.2"></rect>
+          <text x="350" y="60" text-anchor="middle" style="font-family:'Geist Mono',monospace;font-size:10px;fill:var(--violet)">PROBE · INVARIANT</text>
+          <text x="350" y="80" text-anchor="middle" style="font-size:13px;font-weight:600;fill:var(--ink)">candidate Hi</text>
+          <text x="350" y="97" text-anchor="middle" style="font-size:10.5px;fill:var(--faint)">forbid pseudo-calls</text>
+
+          <rect x="500" y="34" width="180" height="72" rx="11" style="fill:var(--surface);stroke:var(--violet);stroke-width:1.2"></rect>
+          <text x="590" y="60" text-anchor="middle" style="font-family:'Geist Mono',monospace;font-size:10px;fill:var(--violet)">PROBE · DOMAIN</text>
+          <text x="590" y="80" text-anchor="middle" style="font-size:13px;font-weight:600;fill:var(--ink)">candidate Hd</text>
+          <text x="590" y="97" text-anchor="middle" style="font-size:10.5px;fill:var(--faint)">pin the aggregate grain</text>
+
+          <line x1="200" y1="70" x2="254" y2="70" style="stroke:var(--muted);stroke-width:1.4;stroke-dasharray:5 4" class="dash"></line>
+          <line x1="440" y1="70" x2="494" y2="70" style="stroke:var(--muted);stroke-width:1.4;stroke-dasharray:5 4" class="dash"></line>
+
+          <rect x="150" y="140" width="400" height="46" rx="10" style="fill:var(--brand-wash);stroke:var(--brand);stroke-width:1.3"></rect>
+          <text x="350" y="161" text-anchor="middle" style="font-size:13px;font-weight:600;fill:var(--ink)">behavioral contrast, not a score</text>
+          <text x="350" y="178" text-anchor="middle" style="font-size:11px;fill:var(--muted)">did the edit remove the deficiency, change nothing, or break something?</text>
+          <line x1="350" y1="106" x2="350" y2="136" style="stroke:var(--brand);stroke-width:1.5;marker-end:url(#arwB)"></line>
+        </svg>
+        <figcaption class="figcap"><span class="lbl">Fig 3</span>Matched conditions: same model, same task, same environment. Only the file changed.</figcaption>
+      </figure>
+
+      <div class="why">
+        <span class="lbl">Why this matters</span>
+        <p>
+          This is the load-bearing idea, and it transfers to anything you build. If you cannot score an output,
+          you can still diff two behaviors under controlled conditions. That is a weaker signal than correctness,
+          and the paper is careful to say so, but it is a signal you can act on at test time.
+        </p>
+      </div>
+    </div>
+
+    <!-- 3 -->
+    <div class="step">
+      <div class="stephead"><span class="stepnum">03</span><h3>Two editors, deliberately pointed at different things</h3></div>
+      <p class="tight">
+        Each step proposes two candidates from the same reference. The invariant editor hunts for agentic
+        deficiencies that will show up again next week: skipping tool calls, losing context, never verifying its own
+        work, delegating badly. The domain-specific editor writes down the facts of the current situation, which are
+        useful today and worthless tomorrow.
+      </p>
+      <p class="tight">
+        That split is doing real work. The ablation says replacing both editors with generic ones costs 2.9 points on
+        WorkBuddy and 3.7 on JobBench, even though the same number of candidates still gets drafted and probed. Naming
+        the scope is what makes the contrast readable.
+      </p>
+
+      <figure class="inline">
+        <svg viewBox="0 0 700 180" role="img" aria-label="Invariant editor versus domain-specific editor">
+          <rect x="24" y="30" width="310" height="120" rx="12" style="fill:var(--surface);stroke:var(--line-strong);stroke-width:1.2"></rect>
+          <text x="44" y="56" style="font-family:'Geist Mono',monospace;font-size:10.5px;letter-spacing:.1em;fill:var(--brand-ink)">INVARIANT EDITOR</text>
+          <text x="44" y="80" style="font-size:12.5px;fill:var(--ink-2)">"before finishing, reopen the file"</text>
+          <text x="44" y="102" style="font-size:12.5px;fill:var(--ink-2)">"a tool call is not a text line"</text>
+          <text x="44" y="124" style="font-size:12.5px;fill:var(--ink-2)">"verify, do not assume"</text>
+          <text x="44" y="143" style="font-size:11px;fill:var(--faint)">still true on a task in March</text>
+
+          <rect x="366" y="30" width="310" height="120" rx="12" style="fill:var(--surface);stroke:var(--line-strong);stroke-width:1.2"></rect>
+          <text x="386" y="56" style="font-family:'Geist Mono',monospace;font-size:10.5px;letter-spacing:.1em;fill:var(--warn)">DOMAIN EDITOR</text>
+          <text x="386" y="80" style="font-size:12.5px;fill:var(--ink-2)">"group rows by channel, not date"</text>
+          <text x="386" y="102" style="font-size:12.5px;fill:var(--ink-2)">"this file is the source of truth"</text>
+          <text x="386" y="124" style="font-size:12.5px;fill:var(--ink-2)">"treat inputs as read-only"</text>
+          <text x="386" y="143" style="font-size:11px;fill:var(--faint)">garbage the moment the task changes</text>
+        </svg>
+        <figcaption class="figcap"><span class="lbl">Fig 4</span>Same evidence, two different questions pointed at it.</figcaption>
+      </figure>
+
+      <div class="why">
+        <span class="lbl">Why this matters</span>
+        <p>
+          If you build anything that learns from agent runs, keep these two buckets separate. Merging durable
+          behavioral rules with task-specific facts is how a memory layer turns into a pile of stale trivia that
+          slowly degrades every later run.
+        </p>
+      </div>
+    </div>
+
+    <!-- 4 -->
+    <div class="step">
+      <div class="stephead"><span class="stepnum">04</span><h3>Compose makes the proposals into parts, not finalists</h3></div>
+      <p class="tight">
+        The obvious design would pick the better of the two candidates and ship it. Harness² does not. The composer
+        reads every candidate, its diff against the current harness, and the observed behavior, then merges the
+        edits that the evidence supports, revises the ones that conflict, and can also decide to change nothing.
+      </p>
+      <p class="tight">
+        Every decision has to point at a concrete observation. Dropping composition entirely, and just returning
+        whichever candidate the evidence favors, still beats the base harness. It just leaves about 1.6 points on the
+        table on WorkBuddy.
+      </p>
+
+      <figure class="inline">
+        <svg viewBox="0 0 700 200" role="img" aria-label="Composition merging supported edits from two candidates into one successor harness">
+          <rect x="20" y="24" width="152" height="52" rx="10" style="fill:var(--surface);stroke:var(--line-strong);stroke-width:1"></rect>
+          <text x="96" y="46" text-anchor="middle" style="font-size:12px;font-weight:600;fill:var(--ink)">Hi edit</text>
+          <text x="96" y="64" text-anchor="middle" style="font-family:'Geist Mono',monospace;font-size:9.5px;fill:var(--brand-ink)">keep · helped</text>
+
+          <rect x="20" y="112" width="152" height="52" rx="10" style="fill:var(--surface);stroke:var(--line-strong);stroke-width:1"></rect>
+          <text x="96" y="134" text-anchor="middle" style="font-size:12px;font-weight:600;fill:var(--ink)">Hi edit #2</text>
+          <text x="96" y="152" text-anchor="middle" style="font-family:'Geist Mono',monospace;font-size:9.5px;fill:var(--warn)">drop · hurt</text>
+
+          <rect x="232" y="24" width="152" height="52" rx="10" style="fill:var(--surface);stroke:var(--line-strong);stroke-width:1"></rect>
+          <text x="308" y="46" text-anchor="middle" style="font-size:12px;font-weight:600;fill:var(--ink)">Hd edit</text>
+          <text x="308" y="64" text-anchor="middle" style="font-family:'Geist Mono',monospace;font-size:9.5px;fill:var(--brand-ink)">keep · helped</text>
+
+          <rect x="232" y="112" width="152" height="52" rx="10" style="fill:var(--surface);stroke:var(--line-strong);stroke-width:1"></rect>
+          <text x="308" y="134" text-anchor="middle" style="font-size:12px;font-weight:600;fill:var(--ink)">Hd edit #2</text>
+          <text x="308" y="152" text-anchor="middle" style="font-family:'Geist Mono',monospace;font-size:9.5px;fill:var(--faint)">drop · no effect</text>
+
+          <path d="M172,50 L206,50 L206,88 L226,88" style="fill:none;stroke:var(--brand);stroke-width:1.6" class="dash"></path>
+          <path d="M172,138 L206,138 L206,100 L226,100" style="fill:none;stroke:var(--line-strong);stroke-width:1.4;stroke-dasharray:3 4"></path>
+          <path d="M384,50 L418,50 L418,88 L438,88" style="fill:none;stroke:var(--brand);stroke-width:1.6" class="dash"></path>
+          <path d="M384,138 L418,138 L418,100 L438,100" style="fill:none;stroke:var(--line-strong);stroke-width:1.4;stroke-dasharray:3 4"></path>
+
+          <rect x="446" y="46" width="234" height="96" rx="12" style="fill:var(--brand-wash);stroke:var(--brand);stroke-width:1.4"></rect>
+          <text x="563" y="74" text-anchor="middle" style="font-size:14px;font-weight:600;fill:var(--ink)">successor H'</text>
+          <text x="563" y="98" text-anchor="middle" style="font-family:'Geist Mono',monospace;font-size:10px;fill:var(--muted)">2 edits in, 2 dropped</text>
+          <text x="563" y="118" text-anchor="middle" style="font-size:11px;fill:var(--brand-ink)">executed, then delivered</text>
+        </svg>
+        <figcaption class="figcap"><span class="lbl">Fig 5</span>Composition is a merge with receipts, not a winner-take-all.</figcaption>
+      </figure>
+
+      <div class="why">
+        <span class="lbl">Why this matters</span>
+        <p>
+          Candidate selection throws away information. Composition keeps the part of an idea that the evidence
+          supports even when the candidate as a whole lost. That is also why the cost is what it is: you are paying
+          for multiple executions and several editor sessions per task, and the paper is upfront that raising the
+          budget raises inference cost.
+        </p>
+      </div>
+    </div>
+
+    <!-- 5 -->
+    <div class="step">
+      <div class="stephead"><span class="stepnum">05</span><h3>The second loop learns how to improve</h3></div>
+      <p class="tight">
+        Here is the part I keep coming back to. Improving the harness for one task produces a trail: which
+        deficiency was diagnosed, which edits were tried, what each one actually did to the agent's behavior. Most
+        systems throw that trail away after the deliverable ships.
+      </p>
+      <p class="tight">
+        Harness² reads the whole improvement record and writes a library entry per task: the adopted harness plus an
+        EXPERIENCE.md holding the shape of the situation, the transferable lesson, and the execution evidence
+        behind it. The next task starts from the same base harness, but the proposer can now reach into that library.
+        Two details make this honest rather than a scrapbook. A lesson is kept only when execution evidence supports
+        it, and when the evidence is too thin the system writes nothing rather than guessing.
+      </p>
+
+      <figure class="inline">
+        <svg viewBox="0 0 700 260" role="img" aria-label="The improvement library accumulating across a task stream">
+          <text x="350" y="20" text-anchor="middle" style="font-family:'Geist Mono',monospace;font-size:10px;letter-spacing:.12em;fill:var(--muted)">TASK STREAM · EACH TASK STARTS AT BASE H0</text>
+
+          <rect x="30" y="200" width="130" height="40" rx="10" style="fill:var(--surface);stroke:var(--line-strong);stroke-width:1"></rect>
+          <text x="95" y="225" text-anchor="middle" style="font-size:12px;fill:var(--ink)">task 1</text>
+          <rect x="180" y="200" width="130" height="40" rx="10" style="fill:var(--surface);stroke:var(--line-strong);stroke-width:1"></rect>
+          <text x="245" y="225" text-anchor="middle" style="font-size:12px;fill:var(--ink)">task 2</text>
+          <rect x="330" y="200" width="130" height="40" rx="10" style="fill:var(--surface);stroke:var(--line-strong);stroke-width:1"></rect>
+          <text x="395" y="225" text-anchor="middle" style="font-size:12px;fill:var(--ink)">task 3</text>
+          <rect x="480" y="200" width="130" height="40" rx="10" style="fill:var(--surface);stroke:var(--line-strong);stroke-width:1;stroke-dasharray:4 4"></rect>
+          <text x="545" y="225" text-anchor="middle" style="font-size:12px;fill:var(--faint)">task N</text>
+
+          <line x1="95" y1="196" x2="95" y2="150" style="stroke:var(--muted);stroke-width:1.2;marker-end:url(#arw)"></line>
+          <line x1="245" y1="196" x2="245" y2="150" style="stroke:var(--muted);stroke-width:1.2;marker-end:url(#arw)"></line>
+          <line x1="395" y1="196" x2="395" y2="150" style="stroke:var(--muted);stroke-width:1.2;marker-end:url(#arw)"></line>
+
+          <g>
+            <rect x="30" y="94" width="130" height="52" rx="10" style="fill:var(--brand-wash);stroke:var(--brand);stroke-width:1.2"></rect>
+            <text x="95" y="116" text-anchor="middle" style="font-family:'Geist Mono',monospace;font-size:10px;fill:var(--brand-ink)">entry 01</text>
+            <text x="95" y="133" text-anchor="middle" style="font-size:10.5px;fill:var(--muted)">H* + EXPER.md</text>
+          </g>
+          <g>
+            <rect x="180" y="94" width="130" height="52" rx="10" style="fill:var(--brand-wash);stroke:var(--brand);stroke-width:1.2"></rect>
+            <text x="245" y="116" text-anchor="middle" style="font-family:'Geist Mono',monospace;font-size:10px;fill:var(--brand-ink)">entry 02</text>
+            <text x="245" y="133" text-anchor="middle" style="font-size:10.5px;fill:var(--muted)">H* + EXPER.md</text>
+          </g>
+          <g>
+            <rect x="330" y="94" width="130" height="52" rx="10" style="fill:var(--surface-2);stroke:var(--line-strong);stroke-width:1;stroke-dasharray:4 4"></rect>
+            <text x="395" y="116" text-anchor="middle" style="font-family:'Geist Mono',monospace;font-size:10px;fill:var(--faint)">if evidence is thin</text>
+            <text x="395" y="133" text-anchor="middle" style="font-size:10.5px;fill:var(--faint)">write nothing</text>
+          </g>
+
+          <path d="M30,120 L14,120 L14,56 L672,56" style="fill:none;stroke:var(--brand);stroke-width:1.4;stroke-dasharray:5 5" class="dash"></path>
+          <rect x="540" y="42" width="150" height="30" rx="9999px" style="fill:var(--surface);stroke:var(--line-strong);stroke-width:1"></rect>
+          <text x="615" y="62" text-anchor="middle" style="font-family:'Geist Mono',monospace;font-size:10px;fill:var(--muted)">improvement harness R</text>
+        </svg>
+        <figcaption class="figcap"><span class="lbl">Fig 6</span>Every task restarts at H0. What compounds is the library, not the harness.</figcaption>
+      </figure>
+
+      <div class="why">
+        <span class="lbl">Why this matters</span>
+        <p>
+          Removing the library costs 3.1 points on WorkBuddy and 1.8 on JobBench, and the paper also shows a
+          library built on JobBench transferring to WorkBuddy. A lesson that names a pattern rather than this
+          task's facts is a lesson that can fire on something you have never seen.
+        </p>
+      </div>
+    </div>
+
+    <!-- 6 -->
+    <div class="step">
+      <div class="stephead"><span class="stepnum">06</span><h3>What the numbers actually say</h3></div>
+      <p class="tight">
+        Gemini 3.5 Flash under OpenCode, WorkBuddy-Bench, means across three domains. The base harness averages
+        72.4. One Harness² step takes it to 77.5. Parallel recursion at k=5 takes it to 80.8. The baselines they
+        compare against are real systems: ReasoningBank, Harness Scaling, and Meta-Harness, which is the strongest
+        of them at 76.4.
+      </p>
+      <p class="tight">
+        The same model, the same starting harness, no weight changes. The gains hold across four executor-harness
+        configurations including settings where the same model plays both executor and editor. And they are not
+        free: the compute-perf frontier favors Harness², but every point above the baseline was bought with more
+        executions.
+      </p>
+
+      <figure class="inline">
+        <svg viewBox="0 0 700 300" role="img" aria-label="WorkBuddy-Bench scores by method">
+          <line x1="210" y1="20" x2="210" y2="262" style="stroke:var(--line-strong);stroke-width:1"></line>
+          <g style="font-family:'Geist Mono',monospace;font-size:10.5px;fill:var(--muted)">
+            <text x="200" y="40" text-anchor="end">Base harness</text>
+            <text x="200" y="86" text-anchor="end">ReasoningBank</text>
+            <text x="200" y="132" text-anchor="end">Harness Scaling</text>
+            <text x="200" y="178" text-anchor="end">Meta-Harness</text>
+            <text x="200" y="224" text-anchor="end">Harness2 k=1</text>
+            <text x="200" y="266" text-anchor="end">Harness2 k=5</text>
+          </g>
+          <g>
+            <rect x="210" y="28" width="118" height="20" rx="5" style="fill:var(--surface-2);stroke:var(--line-strong);stroke-width:1" class="bar"></rect>
+            <text x="336" y="43" style="font-family:'Geist Mono',monospace;font-size:11px;fill:var(--muted)">72.4</text>
+
+            <rect x="210" y="74" width="125" height="20" rx="5" style="fill:var(--surface-2);stroke:var(--line-strong);stroke-width:1" class="bar"></rect>
+            <text x="343" y="89" style="font-family:'Geist Mono',monospace;font-size:11px;fill:var(--muted)">73.4</text>
+
+            <rect x="210" y="120" width="138" height="20" rx="5" style="fill:var(--surface-2);stroke:var(--line-strong);stroke-width:1" class="bar"></rect>
+            <text x="356" y="135" style="font-family:'Geist Mono',monospace;font-size:11px;fill:var(--muted)">75.3</text>
+
+            <rect x="210" y="166" width="152" height="20" rx="5" style="fill:var(--surface-2);stroke:var(--muted);stroke-width:1.2" class="bar"></rect>
+            <text x="370" y="181" style="font-family:'Geist Mono',monospace;font-size:11px;fill:var(--ink-2)">76.4</text>
+
+            <rect x="210" y="212" width="168" height="20" rx="5" style="fill:var(--brand-wash);stroke:var(--brand);stroke-width:1.4" class="bar">
+              <animate attributeName="opacity" values="1;0.55;1" dur="3.4s" repeatCount="indefinite"></animate>
+            </rect>
+            <text x="386" y="227" style="font-family:'Geist Mono',monospace;font-size:11px;fill:var(--brand-ink)">77.5</text>
+
+            <rect x="210" y="254" width="212" height="20" rx="5" style="fill:var(--brand);stroke:var(--brand);stroke-width:1.4" class="bar">
+              <animate attributeName="opacity" values="1;0.62;1" dur="3.4s" begin="0.5s" repeatCount="indefinite"></animate>
+            </rect>
+            <text x="430" y="269" style="font-family:'Geist Mono',monospace;font-size:11px;font-weight:600;fill:var(--ink)">80.8</text>
+          </g>
+          <text x="450" y="292" text-anchor="middle" style="font-family:'Geist Mono',monospace;font-size:10px;fill:var(--muted)">WorkBuddy average score · Gemini 3.5 Flash / OpenCode · means over 3 runs</text>
+        </svg>
+        <figcaption class="figcap"><span class="lbl">Fig 7</span>Higher is better. The gap between k=1 and k=5 is the recursion budget, bought with compute.</figcaption>
+      </figure>
+
+      <figure class="inline">
+        <svg viewBox="0 0 700 220" role="img" aria-label="A concrete WorkBuddy Code case: the reference emitted tool calls as plain text, a tool-guidance edit forbidding that, and the score moved from 60 to 100">
+          <rect x="20" y="30" width="200" height="130" rx="12" style="fill:var(--surface);stroke:var(--line-strong);stroke-width:1.2"></rect>
+          <text x="120" y="56" text-anchor="middle" style="font-family:'Geist Mono',monospace;font-size:9.5px;letter-spacing:.1em;fill:var(--muted)">BEFORE · 60.0</text>
+          <rect x="40" y="72" width="160" height="12" rx="3" style="fill:var(--surface-2);stroke:var(--line);stroke-width:1"></rect>
+          <rect x="40" y="92" width="126" height="12" rx="3" style="fill:var(--surface-2);stroke:var(--line);stroke-width:1"></rect>
+          <rect x="40" y="112" width="150" height="12" rx="3" style="fill:var(--surface-2);stroke:var(--line);stroke-width:1"></rect>
+          <text x="120" y="146" text-anchor="middle" style="font-size:10.5px;fill:var(--faint)">wrote tool calls as text</text>
+
+          <rect x="500" y="30" width="180" height="130" rx="12" style="fill:var(--brand-wash);stroke:var(--brand);stroke-width:1.4"></rect>
+          <text x="590" y="56" text-anchor="middle" style="font-family:'Geist Mono',monospace;font-size:9.5px;letter-spacing:.1em;fill:var(--brand-ink)">AFTER · 100.0</text>
+          <g>
+            <rect x="520" y="72" width="140" height="12" rx="3" style="fill:var(--brand);opacity:.2">
+              <animate attributeName="opacity" values="0.12;0.42;0.12" dur="2.6s" repeatCount="indefinite"></animate>
+            </rect>
+            <rect x="520" y="92" width="112" height="12" rx="3" style="fill:var(--brand);opacity:.2">
+              <animate attributeName="opacity" values="0.12;0.42;0.12" dur="2.6s" begin="0.25s" repeatCount="indefinite"></animate>
+            </rect>
+            <rect x="520" y="112" width="132" height="12" rx="3" style="fill:var(--brand);opacity:.2">
+              <animate attributeName="opacity" values="0.12;0.42;0.12" dur="2.6s" begin="0.5s" repeatCount="indefinite"></animate>
+            </rect>
+          </g>
+          <text x="590" y="146" text-anchor="middle" style="font-size:10.5px;fill:var(--brand-ink)">actually ran the tools</text>
+
+          <path d="M226,95 L494,95" style="fill:none;stroke:var(--brand);stroke-width:1.8;stroke-dasharray:7 6" class="dash"></path>
+          <circle cx="360" cy="95" r="4" style="fill:var(--brand)">
+            <animate attributeName="r" values="3.5;6;3.5" dur="2.2s" repeatCount="indefinite"></animate>
+          </circle>
+
+          <rect x="180" y="178" width="340" height="34" rx="8" style="fill:var(--surface);stroke:var(--line-strong);stroke-width:1"></rect>
+          <text x="350" y="199" text-anchor="middle" style="font-family:'Geist Mono',monospace;font-size:10px;fill:var(--muted)">one edit: C4 tool guidance forbids pseudo-calls</text>
+        </svg>
+        <figcaption class="figcap"><span class="lbl">Fig 8</span>A real case from WorkBuddy Code. One component changed, and the observed behavior changed with it.</figcaption>
+      </figure>
+
+      <div class="why">
+        <span class="lbl">Why this matters</span>
+        <p>
+          Nothing here required a smarter model. The base model already knew it should call tools; the harness had
+          not told it so clearly enough, and the harness was the thing that got rewritten. Read the ablation table
+          and the pattern holds: removing skills costs 4.3 points, removing the prompt group costs 3.7, and every
+          ablated harness still beats the base.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="confusions">
+  <div class="wrap">
+    <div class="center">
+      <div class="tag">Common confusions</div>
+      <h2>Four things worth getting right</h2>
+    </div>
+    <div class="cards">
+      <div class="card">
+        <div class="n">01</div>
+        <h4>"It's just the agent rewriting its own prompt until it feels good."</h4>
+        <p class="wrong">That framing makes it sound like a loop of vibes with no evaluation inside.</p>
+        <p class="right">
+          <b>The actual loop has a control.</b> Every candidate runs under matched conditions against a reference
+          execution, and composition only keeps edits tied to an observed behavior change. The paper's reflector
+          prompt even tells the system to prefer the verdict "confounded" over an invented attribution, and to write
+          nothing when the evidence is thin.
+        </p>
+      </div>
+      <div class="card">
+        <div class="n">02</div>
+        <h4>"The improvement loop uses self-reward or an LLM judge to pick the winner."</h4>
+        <p class="wrong">This is the standard fallback when no ground truth exists, and Harness² is explicitly not that.</p>
+        <p class="right">
+          <b>Selection is blind to provenance, by design.</b> At k greater than 1 a selector compares anonymized
+          deliverables, so it can say which output reads best but not which edit produced it. The authors note the
+          star on the adopted harness means adoption, not verified optimality. Evidence comes from execution
+          contrast; the judge only picks a deliverable.
+        </p>
+      </div>
+      <div class="card">
+        <div class="n">03</div>
+        <h4>"A harness that worked on this task carries forward to the next one."</h4>
+        <p class="wrong">It sounds like the harness accumulates, which is exactly the noisy-recursive-improvement trap.</p>
+        <p class="right">
+          <b>Every task restarts from the same base harness H0.</b> What carries forward is the library of adopted
+          harnesses plus their lessons, and components get reused or adapted deliberately through Propose rather
+          than inherited wholesale. Tailoring that sticks around is how accumulated edits start fighting each other.
+        </p>
+      </div>
+      <div class="card">
+        <div class="n">04</div>
+        <h4>"Better scores mean it got better at reasoning."</h4>
+        <p class="wrong">It is tempting to read the benchmark deltas as a capability change.</p>
+        <p class="right">
+          <b>The weights never move.</b> The gains come from harness edits, and the paper shows a wide gap between
+          strong and weak settings at zero training cost. It also shows how it can go wrong: the selector picked a
+          55 over a 95 on one case, and a wrong premise baked into a candidate spread across probes and cost 11
+          points on another. This is scaffolding quality, not model quality.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="next">
+  <div class="wrap">
+    <div class="center">
+      <div class="tag">Where to go next</div>
+      <h2>Three specific places</h2>
+    </div>
+    <div class="next">
+      <a href="https://arxiv.org/html/2610.14224v1#S4.T3" target="_blank" rel="noopener">
+        <span class="k">Read</span>
+        <span>
+          <span class="t">The ablation table in section 4</span>
+          <span class="d">Four configurations, three ablations, and the component ablation in Appendix D. The fastest way to see which parts of the design are load-bearing.</span>
+        </span>
+      </a>
+      <a href="https://github.com/google-research/harness2" target="_blank" rel="noopener">
+        <span class="k">Run</span>
+        <span>
+          <span class="t">google-research/harness2</span>
+          <span class="d">Apache 2.0, released with a deterministic local demo that needs no model credentials. Good way to see the loop actually iterate before wiring up a real model.</span>
+        </span>
+      </a>
+      <a href="https://openai.com/index/harness-engineering/" target="_blank" rel="noopener">
+        <span class="k">Compare</span>
+        <span>
+          <span class="t">OpenAI's harness engineering post</span>
+          <span class="d">The static-harness version of the same idea, from the other direction. Read it first, then read Harness² to see what recursion adds.</span>
+        </span>
+      </a>
+    </div>
+  </div>
+</section>
+
+<section id="sources">
+  <div class="wrap">
+    <div class="center">
+      <div class="tag">Sources</div>
+      <h2>Where this comes from</h2>
+    </div>
+    <div class="srcs" style="max-width:72ch">
+      <ol>
+        <li><a href="https://arxiv.org/abs/2610.14224" target="_blank" rel="noopener">Xu et al., "Harness²: Recursive Agent Harnessing for an Open World", arXiv:2610.14224 (submitted 9 Oct 2026)</a></li>
+        <li><a href="https://arxiv.org/html/2610.14224v1" target="_blank" rel="noopener">Full HTML paper: method, ablations, failure analysis, limitations</a></li>
+        <li><a href="https://github.com/google-research/harness2" target="_blank" rel="noopener">google-research/harness2 code release</a></li>
+        <li><a href="https://harness2.github.io/" target="_blank" rel="noopener">Harness² project page: result tables and JobBench case study</a></li>
+      </ol>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <p>Day 24 of the explainer series. Built by Hermes using the explainer-builder skill.</p>
+  </div>
+</footer>
+
+<script>
+  (function () {
+    var root = document.documentElement;
+    var btn = document.getElementById('themeBtn');
+    btn.addEventListener('click', function () {
+      var cur = root.getAttribute('data-theme');
+      if (!cur) {
+        cur = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+      }
+      var next = cur === 'dark' ? 'light' : 'dark';
+      root.setAttribute('data-theme', next);
+      try { localStorage.setItem('theme', next); } catch (e) {}
+    });
+  })();
+</script>
+</body>
+</html>
