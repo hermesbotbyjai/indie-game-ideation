@@ -1,0 +1,865 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LLM-scaled formal verification, and the trusted base it shrinks</title>
+<meta name="description" content="Claude proved 123 open-source libraries crash-free at the RISC-V instruction level. The interesting part isn't the proofs. It's that the trusted computing base stopped growing.">
+<script>
+(function(){
+  try{
+    var t = localStorage.getItem('theme');
+    if(t === 'dark' || t === 'light') document.documentElement.setAttribute('data-theme', t);
+  }catch(e){}
+})();
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#ffffff;
+  --bg-subtle:#fafafa;
+  --surface:rgba(13,13,13,0.04);
+  --border:rgba(13,13,13,0.10);
+  --border-strong:rgba(13,13,13,0.18);
+  --fg:#0d0d0d;
+  --fg-muted:#5c5c5c;
+  --fg-faint:#8a8a8a;
+  --accent:#18E299;
+  --accent-ink:#0d0d0d;
+  --accent-wash:rgba(24,226,153,0.10);
+  --warn:#d97706;
+  --warn-wash:rgba(217,119,6,0.09);
+  --danger:#dc2626;
+  --danger-wash:rgba(220,38,38,0.08);
+  --mono:'Geist Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+  --sans:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+}
+html[data-theme="dark"]{
+  --bg:#0a0a0a;
+  --bg-subtle:#111111;
+  --surface:rgba(255,255,255,0.05);
+  --border:rgba(255,255,255,0.11);
+  --border-strong:rgba(255,255,255,0.20);
+  --fg:#f5f5f5;
+  --fg-muted:#a3a3a3;
+  --fg-faint:#737373;
+  --accent:#2af5a8;
+  --accent-ink:#0a0a0a;
+  --accent-wash:rgba(42,245,168,0.12);
+  --warn:#fbbf24;
+  --warn-wash:rgba(251,191,36,0.10);
+  --danger:#f87171;
+  --danger-wash:rgba(248,113,113,0.10);
+}
+@media (prefers-color-scheme:dark){
+  html:not([data-theme="light"]){
+    --bg:#0a0a0a; --bg-subtle:#111111;
+    --surface:rgba(255,255,255,0.05);
+    --border:rgba(255,255,255,0.11);
+    --border-strong:rgba(255,255,255,0.20);
+    --fg:#f5f5f5; --fg-muted:#a3a3a3; --fg-faint:#737373;
+    --accent:#2af5a8; --accent-ink:#0a0a0a;
+    --accent-wash:rgba(42,245,168,0.12);
+    --warn:#fbbf24; --warn-wash:rgba(251,191,36,0.10);
+    --danger:#f87171; --danger-wash:rgba(248,113,113,0.10);
+  }
+}
+*{box-sizing:border-box;}
+html{scroll-behavior:smooth;-webkit-text-size-adjust:100%;}
+body{
+  margin:0;background:var(--bg);color:var(--fg);
+  font-family:var(--sans);font-size:17px;line-height:1.6;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:1200px;margin:0 auto;padding:0 24px;}
+code,.mono{font-family:var(--mono);font-size:0.88em;}
+p code,.mono-chip{
+  background:var(--surface);border:1px solid var(--border);
+  padding:1px 6px;border-radius:6px;
+}
+
+/* nav */
+nav{
+  position:sticky;top:0;z-index:50;
+  background:color-mix(in srgb,var(--bg) 88%,transparent);
+  backdrop-filter:blur(12px);border-bottom:1px solid var(--border);
+}
+.nav-in{max-width:1200px;margin:0 auto;padding:14px 24px;display:flex;align-items:center;gap:16px;}
+.brand{font-family:var(--mono);font-size:12px;letter-spacing:.10em;text-transform:uppercase;color:var(--fg-muted);text-decoration:none;font-weight:500;}
+.brand:hover{color:var(--fg);}
+.nav-spacer{flex:1;}
+.chip{
+  font-family:var(--mono);font-size:11px;letter-spacing:.09em;text-transform:uppercase;
+  color:var(--fg-muted);border:1px solid var(--border);border-radius:9999px;
+  padding:7px 14px;background:transparent;cursor:pointer;font-family:var(--mono);
+  transition:border-color .2s,color .2s;
+}
+.chip:hover{border-color:var(--border-strong);color:var(--fg);}
+.chip:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+
+/* hero */
+.hero{padding:96px 0 72px;position:relative;overflow:hidden;}
+.hero::before{
+  content:"";position:absolute;inset:-40% 0 auto 0;height:520px;z-index:-1;
+  background:radial-gradient(ellipse 60% 100% at 50% 0%,var(--accent-wash),transparent 70%);
+  pointer-events:none;
+}
+.tag{
+  display:inline-block;font-family:var(--mono);font-size:11px;letter-spacing:.10em;
+  text-transform:uppercase;color:var(--accent-ink);background:var(--accent);
+  padding:5px 12px;border-radius:9999px;font-weight:600;margin-bottom:24px;
+}
+h1{
+  font-size:64px;line-height:1.05;letter-spacing:-0.035em;font-weight:700;
+  margin:0 0 24px;max-width:17ch;
+}
+h1 .dim{color:var(--fg-faint);}
+.tagline{font-size:22px;line-height:1.45;color:var(--fg-muted);max-width:60ch;margin:0 0 44px;}
+.get{
+  display:grid;grid-template-columns:repeat(4,1fr);gap:1px;
+  background:var(--border);border:1px solid var(--border);
+  border-radius:14px;overflow:hidden;max-width:960px;
+}
+.get-item{background:var(--bg);padding:22px 20px;}
+.get-n{
+  font-family:var(--mono);font-size:11px;color:var(--accent);letter-spacing:.08em;
+  display:block;margin-bottom:10px;
+}
+.get-t{font-size:15px;line-height:1.45;color:var(--fg-muted);}
+
+/* sections */
+section{padding:76px 0;border-top:1px solid var(--border);}
+.kicker{
+  font-family:var(--mono);font-size:11px;letter-spacing:.11em;text-transform:uppercase;
+  color:var(--fg-faint);margin:0 0 14px;font-weight:500;
+}
+h2{font-size:40px;line-height:1.12;letter-spacing:-0.028em;font-weight:700;margin:0 0 26px;max-width:22ch;}
+h3{font-size:23px;line-height:1.25;letter-spacing:-0.018em;font-weight:650;margin:0 0 14px;}
+p{margin:0 0 18px;}
+.lead{font-size:19px;color:var(--fg-muted);max-width:66ch;}
+.body-text{max-width:66ch;}
+.body-text p{color:var(--fg);}
+
+/* one-sentence callout */
+.onemodel{
+  border:1px solid var(--border-strong);border-radius:16px;
+  padding:34px 34px 30px;background:var(--bg-subtle);
+  position:relative;overflow:hidden;
+}
+.onemodel::before{
+  content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--accent);
+}
+.onemodel .label{
+  font-family:var(--mono);font-size:11px;letter-spacing:.11em;text-transform:uppercase;
+  color:var(--accent);margin-bottom:16px;font-weight:600;
+}
+.onemodel .line{font-size:23px;line-height:1.42;letter-spacing:-0.014em;max-width:52ch;margin:0;}
+
+/* diagram */
+.diagram{margin:44px 0 8px;}
+.diagram svg{display:block;width:100%;height:auto;max-width:720px;}
+.dcap{
+  font-family:var(--mono);font-size:12px;color:var(--fg-faint);
+  margin-top:14px;letter-spacing:.01em;max-width:720px;
+}
+
+/* aside */
+.matters{
+  border-left:2px solid var(--accent);padding:18px 22px;margin:32px 0;
+  background:var(--accent-wash);border-radius:0 10px 10px 0;max-width:66ch;
+}
+.matters .label{
+  font-family:var(--mono);font-size:10px;letter-spacing:.11em;text-transform:uppercase;
+  color:var(--accent-ink);background:var(--accent);display:inline-block;
+  padding:3px 9px;border-radius:9999px;font-weight:600;margin-bottom:10px;
+}
+.matters p{margin:0;font-size:16px;line-height:1.55;}
+
+/* stats */
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--border);
+  border:1px solid var(--border);border-radius:14px;overflow:hidden;margin:36px 0;}
+.stat{background:var(--bg);padding:24px 20px;}
+.stat .n{font-size:32px;font-weight:700;letter-spacing:-0.03em;line-height:1.1;
+  font-variant-numeric:tabular-nums;margin-bottom:6px;}
+.stat .l{font-family:var(--mono);font-size:11px;color:var(--fg-faint);
+  letter-spacing:.06em;text-transform:uppercase;line-height:1.45;}
+
+/* confusions */
+.confusions{display:grid;gap:16px;margin-top:34px;}
+.conf{border:1px solid var(--border);border-radius:14px;padding:26px 28px;background:var(--bg-subtle);}
+.conf-h{display:flex;gap:14px;align-items:baseline;margin-bottom:12px;}
+.conf-n{font-family:var(--mono);font-size:12px;color:var(--fg-faint);font-weight:600;flex-shrink:0;padding-top:3px;}
+.conf h3{font-size:18px;margin:0;line-height:1.35;}
+.conf .wrong{
+  font-size:15px;color:var(--fg-muted);padding-left:16px;
+  border-left:2px solid var(--danger);margin:0 0 14px;
+}
+.conf .right{
+  font-size:15px;padding-left:16px;border-left:2px solid var(--accent);margin:0;
+}
+
+/* next */
+.next{display:grid;gap:14px;margin-top:30px;}
+.next a{
+  display:block;text-decoration:none;color:inherit;
+  border:1px solid var(--border);border-radius:14px;padding:22px 24px;
+  transition:border-color .2s,transform .2s,background .2s;
+}
+.next a:hover{border-color:var(--accent);background:var(--accent-wash);transform:translateX(3px);}
+.next a:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+.next .t{font-size:17px;font-weight:600;margin-bottom:6px;letter-spacing:-.01em;}
+.next .d{font-size:15px;color:var(--fg-muted);line-height:1.5;margin:0;}
+.next .u{font-family:var(--mono);font-size:11px;color:var(--fg-faint);margin-top:10px;letter-spacing:.02em;word-break:break-all;}
+
+/* footer */
+footer{padding:44px 0 60px;border-top:1px solid var(--border);color:var(--fg-faint);font-size:14px;}
+footer .mono{font-family:var(--mono);font-size:12px;letter-spacing:.05em;}
+
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;}
+
+/* animations */
+@keyframes dash{to{stroke-dashoffset:0;}}
+@keyframes pulse{0%,100%{opacity:0.35;}50%{opacity:1;}}
+@keyframes sweep{0%{transform:translateX(0);}100%{transform:translateX(340px);}}
+@keyframes popin{from{opacity:0;transform:scale(.9);}to{opacity:1;transform:scale(1);}}
+@keyframes flowdash{to{stroke-dashoffset:-60;}}
+@keyframes risein{from{opacity:0;transform:translateY(6px);}to{opacity:1;transform:translateY(0);}}
+@keyframes barfill{from{transform:scaleX(0);}to{transform:scaleX(1);}}
+@keyframes gitpulse{0%,100%{opacity:.25;r:3;}50%{opacity:1;r:5;}}
+
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{
+    animation-duration:0.001ms !important;animation-iteration-count:1 !important;
+    transition-duration:0.001ms !important;scroll-behavior:auto !important;
+  }
+}
+
+@media (max-width:900px){
+  .stats,.get{grid-template-columns:repeat(2,1fr);}
+}
+@media (max-width:640px){
+  body{font-size:16px;}
+  .hero{padding:64px 0 52px;}
+  h1{font-size:44px;}
+  h2{font-size:32px;}
+  section{padding:56px 0;}
+  .onemodel{padding:26px 24px;}
+  .onemodel .line{font-size:19px;}
+  .tagline{font-size:19px;}
+  .stats,.get{grid-template-columns:1fr;}
+  .stat .n{font-size:27px;}
+  .nav-in{gap:10px;padding:12px 24px;}
+  .brand{font-size:11px;}
+}
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="nav-in">
+    <a class="brand" href="#top">Day 26</a>
+    <span class="nav-spacer"></span>
+    <button class="chip" id="themeBtn" aria-label="Toggle dark mode">Theme</button>
+  </div>
+</nav>
+
+<div class="wrap" id="top">
+
+<header class="hero">
+  <span class="tag">Formal methods, scaled</span>
+  <h1>Claude proved 123 libraries crash-free. <span class="dim">The proofs aren't the point.</span></h1>
+  <p class="tagline">Anthropic's verification run is less interesting as a milestone than as a proof that the trusted computing base stops growing with your codebase.</p>
+
+  <div class="get">
+    <div class="get-item"><span class="get-n">01</span><span class="get-t">Why a 391-line parser got a 630,000-line proof</span></div>
+    <div class="get-item"><span class="get-n">02</span><span class="get-t">The three-theorem chain nobody warns you about</span></div>
+    <div class="get-item"><span class="get-n">03</span><span class="get-t">Fuzzing vs. proving: what each one actually buys</span></div>
+    <div class="get-item"><span class="get-n">04</span><span class="get-t">Where agent proofs hit a wall and humans don't</span></div>
+  </div>
+</header>
+
+<section>
+  <p class="kicker">The model in one sentence</p>
+  <div class="onemodel">
+    <div class="label">One sentence</div>
+    <p class="line">An LLM can't prove your code is correct, but it can prove your code matches a spec, which collapses the amount of software anyone has to trust by hand into a fixed handful of components.</p>
+  </div>
+</section>
+
+<section>
+  <p class="kicker">Mental model</p>
+  <h2>The bug surface doesn't grow. The trusted base does not either.</h2>
+  <p class="lead">Picture two stacks. The left one is what you're running. The right one is what someone has to be correct about. Verification only works if the right stack stays small while the left one grows.</p>
+
+  <div class="diagram">
+  <svg viewBox="0 0 720 470" role="img" aria-labelledby="mmTitle mmDesc">
+    <title id="mmTitle">Unverified code versus the trusted computing base</title>
+    <desc id="mmDesc">On the left, an ever-growing stack of unverified libraries sits above the CPU and OS. On the right, after LLM-scaled verification, those libraries move above a thin verified band, while a small fixed base of Rocq, RISC-V semantics and Linux semantics stays constant regardless of how much code is verified.</desc>
+
+    <!-- left column -->
+    <text x="0" y="18" style="fill:var(--fg-muted);font:600 12px var(--mono);letter-spacing:.08em">BEFORE</text>
+    <text x="372" y="18" style="fill:var(--fg-muted);font:600 12px var(--mono);letter-spacing:.08em">AFTER LLM-SCALED VERIFICATION</text>
+
+    <!-- unverified libs left -->
+    <g>
+      <rect x="0" y="34" width="230" height="34" rx="8" style="fill:var(--surface);stroke:var(--border)"/>
+      <text x="115" y="56" text-anchor="middle" style="fill:var(--fg-muted);font:500 12px var(--mono)">lib 122</text>
+      <rect x="0" y="72" width="230" height="34" rx="8" style="fill:var(--surface);stroke:var(--border)"/>
+      <text x="115" y="94" text-anchor="middle" style="fill:var(--fg-muted);font:500 12px var(--mono)">lib 121</text>
+      <rect x="0" y="110" width="230" height="34" rx="8" style="fill:var(--surface);stroke:var(--border)"/>
+      <text x="115" y="132" text-anchor="middle" style="fill:var(--fg-muted);font:500 12px var(--mono)">lib 120</text>
+      <rect x="0" y="148" width="230" height="34" rx="8" style="fill:var(--surface);stroke:var(--border)"/>
+      <text x="115" y="170" text-anchor="middle" style="fill:var(--fg-muted);font:500 12px var(--mono)">...</text>
+      <rect x="0" y="186" width="230" height="34" rx="8" style="fill:var(--surface);stroke:var(--border)"/>
+      <text x="115" y="208" text-anchor="middle" style="fill:var(--fg-muted);font:500 12px var(--mono)">lib 2</text>
+      <rect x="0" y="224" width="230" height="34" rx="8" style="fill:var(--surface);stroke:var(--border)"/>
+      <text x="115" y="246" text-anchor="middle" style="fill:var(--fg-muted);font:500 12px var(--mono)">lib 1</text>
+
+      <!-- unverified base -->
+      <rect x="0" y="268" width="230" height="52" rx="8" style="fill:var(--danger-wash);stroke:var(--danger)"/>
+      <text x="115" y="290" text-anchor="middle" style="fill:var(--fg);font:600 12px var(--mono)">Rocq proof checker</text>
+      <text x="115" y="308" text-anchor="middle" style="fill:var(--fg-muted);font:400 11px var(--mono)">RISC-V + Linux semantics</text>
+      <rect x="0" y="330" width="230" height="34" rx="8" style="fill:var(--surface);stroke:var(--border)"/>
+      <text x="115" y="352" text-anchor="middle" style="fill:var(--fg-muted);font:500 12px var(--mono)">CPU + OS (real machine)</text>
+
+      <!-- growth arrow -->
+      <g>
+        <line x1="248" y1="270" x2="248" y2="40" style="stroke:var(--fg-faint);stroke-width:1.5;stroke-dasharray:4 4">
+          <animate attributeName="opacity" values="0.25;1;0.25" dur="3s" repeatCount="indefinite"/>
+        </line>
+        <polygon points="248,32 243,44 253,44" style="fill:var(--fg-faint)"/>
+        <text x="262" y="150" style="fill:var(--fg-faint);font:500 10px var(--mono)" transform="rotate(-90 262 150)">grows with every dep</text>
+      </g>
+    </g>
+
+    <!-- right column -->
+    <g>
+      <rect x="372" y="34" width="230" height="34" rx="8" style="fill:var(--surface);stroke:var(--border)"/>
+      <text x="487" y="56" text-anchor="middle" style="fill:var(--fg-muted);font:500 12px var(--mono)">lib 122</text>
+      <rect x="372" y="72" width="230" height="34" rx="8" style="fill:var(--surface);stroke:var(--border)"/>
+      <text x="487" y="94" text-anchor="middle" style="fill:var(--fg-muted);font:500 12px var(--mono)">lib 121</text>
+      <rect x="372" y="110" width="230" height="34" rx="8" style="fill:var(--surface);stroke:var(--border)"/>
+      <text x="487" y="132" text-anchor="middle" style="fill:var(--fg-muted);font:500 12px var(--mono)">lib 120</text>
+      <rect x="372" y="148" width="230" height="34" rx="8" style="fill:var(--surface);stroke:var(--border)"/>
+      <text x="487" y="170" text-anchor="middle" style="fill:var(--fg-muted);font:500 12px var(--mono)">...</text>
+      <rect x="372" y="186" width="230" height="34" rx="8" style="fill:var(--surface);stroke:var(--border)"/>
+      <text x="487" y="208" text-anchor="middle" style="fill:var(--fg-muted);font:500 12px var(--mono)">lib 2</text>
+      <rect x="372" y="224" width="230" height="34" rx="8" style="fill:var(--surface);stroke:var(--border)"/>
+      <text x="487" y="246" text-anchor="middle" style="fill:var(--fg-muted);font:500 12px var(--mono)">lib 1</text>
+
+      <!-- verified band -->
+      <rect x="372" y="268" width="230" height="52" rx="8" style="fill:var(--accent-wash);stroke:var(--accent)">
+        <animate attributeName="opacity" values="0.55;1;0.55" dur="4s" repeatCount="indefinite"/>
+      </rect>
+      <text x="487" y="290" text-anchor="middle" style="fill:var(--fg);font:600 12px var(--mono)">machine-checked proofs</text>
+      <text x="487" y="308" text-anchor="middle" style="fill:var(--fg-muted);font:400 11px var(--mono)">checked by machine, not by eye</text>
+
+      <rect x="372" y="330" width="230" height="34" rx="8" style="fill:var(--danger-wash);stroke:var(--danger)"/>
+      <text x="487" y="352" text-anchor="middle" style="fill:var(--fg);font:600 12px var(--mono)">Rocq + RISC-V + Linux</text>
+
+      <!-- constant arrow -->
+      <g>
+        <line x1="620" y1="270" x2="620" y2="40" style="stroke:var(--accent);stroke-width:1.5">
+          <animate attributeName="stroke-dasharray" values="6 4;6 4" dur="1s" repeatCount="indefinite"/>
+          <animate attributeName="opacity" values="0.4;1;0.4" dur="4s" repeatCount="indefinite"/>
+        </line>
+        <polygon points="620,32 615,44 625,44" style="fill:var(--accent)"/>
+        <text x="634" y="150" style="fill:var(--fg-faint);font:500 10px var(--mono)" transform="rotate(-90 634 150)">fixed size</text>
+      </g>
+
+      <!-- arrow across -->
+      <g>
+        <path d="M 300 160 Q 330 160 348 160" style="fill:none;stroke:var(--fg);stroke-width:1.5;stroke-dasharray:5 5">
+          <animate attributeName="stroke-dashoffset" values="20;0" dur="1.6s" repeatCount="indefinite"/>
+        </path>
+        <polygon points="356,160 344,155 344,165" style="fill:var(--fg)"/>
+      </g>
+    </g>
+
+    <!-- bracket: what a human must read -->
+    <g>
+      <rect x="372" y="386" width="230" height="60" rx="10" style="fill:var(--bg-subtle);stroke:var(--border)"/>
+      <text x="487" y="408" text-anchor="middle" style="fill:var(--fg-faint);font:600 10px var(--mono);letter-spacing:.08em">A HUMAN MUST BE CORRECT ABOUT</text>
+      <text x="487" y="428" text-anchor="middle" style="fill:var(--fg-muted);font:500 11px var(--mono)">3 components, any # of deps</text>
+    </g>
+  </svg>
+  </div>
+  <p class="dcap">The verification work moves code above the trust line. The trust line itself doesn't move, so verifying the thousandth dependency costs the same in trust as verifying the first.</p>
+
+  <div class="matters">
+    <span class="label">Why this matters</span>
+    <p>Every guarantee in this field has always been gated on human effort, and human effort is the one input that doesn't scale with your GPU budget. If the model absorbs proof-writing, the economics change from "we cannot afford to verify the hundredth library" to "we can verify everything, once."</p>
+  </div>
+</section>
+
+<section>
+  <p class="kicker">Walkthrough</p>
+  <h2>How a fuzz test becomes a theorem</h2>
+
+  <h3>1. You already wrote the spec. You just didn't call it one.</h3>
+  <p class="body-text">
+    <p>Here's the move that makes this work at all, and it isn't about model quality. You need to state what "correct" means before anything can be proved about it, and for most software that's genuinely hard. What does it mean for a browser to be correct? Nobody has that spec.</p>
+    <p>Anthropic sidestepped it by noticing that the spec already existed. Every project in Google's OSS-Fuzz has an <code>entry point</code> a developer wrote, and an engineer already decided that any input causing a crash there is a bug worth caring about. Encoding "this test never crashes" is a complete, unambiguous spec, and it was sitting in the repo the whole time.</p>
+  </p>
+
+  <div class="diagram">
+  <svg viewBox="0 0 720 250" role="img" aria-labelledby="d1Title">
+    <title id="d1Title">Fuzzing versus proving</title>
+    <desc id="d1Desc">Fuzzing throws many sampled inputs at a binary and finds crashes it happens to hit, with no guarantee about inputs it misses. Proving establishes that no input at all produces a crash, and terminates the need to fuzz.</desc>
+
+    <text x="105" y="20" text-anchor="middle" style="fill:var(--fg-muted);font:600 11px var(--mono);letter-spacing:.08em">FUZZING</text>
+    <text x="615" y="20" text-anchor="middle" style="fill:var(--fg-muted);font:600 11px var(--mono);letter-spacing:.08em">PROVING</text>
+
+    <!-- left: sampled inputs -->
+    <circle cx="105" cy="70" r="26" style="fill:var(--surface);stroke:var(--border)"/>
+    <text x="105" y="75" text-anchor="middle" style="fill:var(--fg-muted);font:500 11px var(--mono)">binary</text>
+
+    <g>
+      <circle cx="34" cy="126" r="6" style="fill:var(--danger)"/>
+      <circle cx="72" cy="140" r="4" style="fill:var(--fg-faint)"/>
+      <circle cx="112" cy="130" r="6" style="fill:var(--danger)"/>
+      <circle cx="152" cy="146" r="4" style="fill:var(--fg-faint)"/>
+      <circle cx="56" cy="168" r="4" style="fill:var(--fg-faint)"/>
+      <circle cx="140" cy="172" r="4" style="fill:var(--fg-faint)"/>
+      <circle cx="98" cy="186" r="6" style="fill:var(--danger)"/>
+      <path d="M 105 96 Q 90 110 78 122" style="fill:none;stroke:var(--fg-faint);stroke-width:1;stroke-dasharray:3 3"/>
+      <path d="M 105 96 Q 120 110 132 126" style="fill:none;stroke:var(--fg-faint);stroke-width:1;stroke-dasharray:3 3"/>
+      <path d="M 105 96 Q 105 116 105 126" style="fill:none;stroke:var(--fg-faint);stroke-width:1;stroke-dasharray:3 3"/>
+      <path d="M 105 96 Q 88 130 92 178" style="fill:none;stroke:var(--fg-faint);stroke-width:1;stroke-dasharray:3 3"/>
+    </g>
+    <text x="105" y="216" text-anchor="middle" style="fill:var(--danger);font:500 11px var(--mono)">3 found</text>
+    <text x="105" y="234" text-anchor="middle" style="fill:var(--fg-faint);font:400 10px var(--mono)">3 might remain, unknowable</text>
+
+    <!-- divider -->
+    <line x1="360" y1="10" x2="360" y2="240" style="stroke:var(--border)" stroke-dasharray="4 4"/>
+
+    <!-- right: universal quantifier -->
+    <circle cx="500" cy="70" r="26" style="fill:var(--accent-wash);stroke:var(--accent)"/>
+    <text x="500" y="75" text-anchor="middle" style="fill:var(--fg);font:500 11px var(--mono)">binary</text>
+
+    <rect x="560" y="110" width="110" height="86" rx="12" style="fill:var(--accent-wash);stroke:var(--accent)"/>
+    <text x="615" y="142" text-anchor="middle" style="fill:var(--fg);font:600 22px var(--sans)">∀ input</text>
+    <text x="615" y="164" text-anchor="middle" style="fill:var(--fg-muted);font:400 11px var(--mono)">under 64 MB</text>
+    <text x="615" y="182" text-anchor="middle" style="fill:var(--accent);font:600 11px var(--mono)">0 crashes</text>
+
+    <path d="M 526 84 Q 545 96 562 118" style="fill:none;stroke:var(--accent);stroke-width:1.5;stroke-dasharray:5 5">
+      <animate attributeName="stroke-dashoffset" values="20;0" dur="1.6s" repeatCount="indefinite"/>
+    </path>
+
+    <text x="500" y="216" text-anchor="middle" style="fill:var(--accent);font:500 11px var(--mono)">fuzzing is now redundant</text>
+    <text x="500" y="234" text-anchor="middle" style="fill:var(--fg-faint);font:400 10px var(--mono)">you can stop burning CPU on it</text>
+  </svg>
+  </div>
+  <p class="dcap">Sampling finds bugs it lands on. Proving is the quantifier over everything, which is why one proof retires an entire fuzzing campaign.</p>
+
+  <div class="matters">
+    <span class="label">Why this matters</span>
+    <p>This is the reusable trick for your own codebase: you almost certainly have crash-observing harnesses sitting in CI right now. Each one is a spec statement you could be proving instead of re-fuzzing forever. That is the cheapest first move into formal verification, and it needs no new tooling to identify.</p>
+  </div>
+
+  <h3>2. Two theorems are not enough. You need three.</h3>
+  <p class="body-text">
+    <p>This is the part the headline skips, and it's the part that would bite you in review. OSS-Fuzz runs binaries with AddressSanitizer compiled in. Users run the normal binary. ASan changes the program's behaviour. Proving the instrumented binary is crash-free tells you almost nothing about what ships.</p>
+    <p>So the guarantee takes three separate theorems. First: the ASan binary never crashes. Second: the ASan binary and the normal binary are observationally equivalent, meaning same stdin, same stdout and stderr, same exit code or signal, same final filesystem state. Third, and this is the one people forget: the normal binary doesn't crash either. Without it you have a hole where the normal binary crashes in a branch where the instrumented one silently loops, and equivalence never notices.</p>
+  </p>
+
+  <div class="diagram">
+  <svg viewBox="0 0 720 300" role="img" aria-labelledby="d2Title">
+    <title id="d2Title">The three-theorem chain</title>
+    <desc id="d2Desc">Three stacked theorem boxes: the ASan binary never crashes, the ASan binary is observationally equivalent to the normal binary, and the normal binary never crashes. The third feeds back to close the loop.</desc>
+
+    <!-- T1 -->
+    <rect x="40" y="20" width="560" height="62" rx="12" style="fill:var(--accent-wash);stroke:var(--accent)"/>
+    <text x="64" y="46" style="fill:var(--accent);font:600 11px var(--mono)">THEOREM 1</text>
+    <text x="64" y="68" style="fill:var(--fg);font:500 15px var(--sans)">The ASan-instrumented binary never faults or aborts, on any input.</text>
+
+    <!-- T2 -->
+    <rect x="40" y="104" width="560" height="62" rx="12" style="fill:var(--accent-wash);stroke:var(--accent)">
+      <animate attributeName="opacity" values="0.7;1;0.7" dur="4s" repeatCount="indefinite"/>
+    </rect>
+    <text x="64" y="130" style="fill:var(--accent);font:600 11px var(--mono)">THEOREM 2</text>
+    <text x="64" y="152" style="fill:var(--fg);font:500 15px var(--sans)">Both binaries produce the same trace and same final state.</text>
+
+    <!-- T3 -->
+    <rect x="40" y="188" width="560" height="62" rx="12" style="fill:var(--accent-wash);stroke:var(--accent)"/>
+    <text x="64" y="214" style="fill:var(--accent);font:600 11px var(--mono)">THEOREM 3</text>
+    <text x="64" y="236" style="fill:var(--fg);font:500 15px var(--sans)">The normal, uninstrumented binary never crashes either.</text>
+
+    <!-- connectors -->
+    <path d="M 320 82 L 320 104" style="stroke:var(--fg-faint);stroke-width:1.5;fill:none">
+      <animate attributeName="opacity" values="0.3;1;0.3" dur="2s" repeatCount="indefinite"/>
+    </path>
+    <path d="M 320 166 L 320 188" style="stroke:var(--fg-faint);stroke-width:1.5;fill:none">
+      <animate attributeName="opacity" values="0.3;1;0.3" dur="2s" begin="0.7s" repeatCount="indefinite"/>
+    </path>
+
+    <!-- the hole theorem 3 closes -->
+    <path d="M 600 219 Q 660 219 660 135 Q 660 51 600 51" style="fill:none;stroke:var(--danger);stroke-width:1.5;stroke-dasharray:5 5">
+      <animate attributeName="stroke-dashoffset" values="20;0" dur="2.4s" repeatCount="indefinite"/>
+    </path>
+    <polygon points="600,45 594,56 606,56" style="fill:var(--danger)"/>
+    <text x="672" y="135" style="fill:var(--danger);font:500 10px var(--mono)">closes</text>
+    <text x="672" y="149" style="fill:var(--danger);font:500 10px var(--mono)">the hole</text>
+
+    <text x="40" y="280" style="fill:var(--fg-faint);font:400 11px var(--sans)">Without theorem 3, a crash in the shipping binary is invisible: the ASan build just loops there instead.</text>
+  </svg>
+  </div>
+  <p class="dcap">Three theorems, each a real cost, each covering a gap the others leave. Assuming away the third is how "we proved it" quietly stops meaning anything.</p>
+
+  <h3>3. The proof is thirty times the code, and that's the expected shape.</h3>
+  <p class="body-text">
+    <p>The numbers here will look absurd until you understand where the lines go. Claude wrote around a billion lines of Rocq attempting to prove a few hundred entry points; about 180 million survived the proof checker.[2] A finished proof runs roughly 600,000 lines across about 1,400 files.</p>
+    <p>cJSON's 391-line parser got a 630,000-line proof. In cJSON's proof, only about one-tenth of the lines concern cJSON at all. The rest is C runtime startup, the allocator, <code>printf</code>, ASan's own runtime and the fuzz driver, all re-proven from scratch because none of it is shared. Proof size barely tracks the library's size, and that is the honest headline: the economics work because the per-library overhead is enormous, not because the overhead is small.</p>
+  </p>
+
+  <div class="diagram">
+  <svg viewBox="0 0 720 260" role="img" aria-labelledby="d3Title">
+    <title id="d3Title">Where the 630,000 proof lines actually go</title>
+    <desc id="d3Desc">A horizontal stacked bar comparing cJSON's 630,000 proof lines against its 391-line parser. A thin sliver is cJSON itself. Most of the bar is shared runtime re-proven from scratch every time.</desc>
+
+    <text x="0" y="16" style="fill:var(--fg-muted);font:600 11px var(--mono);letter-spacing:.08em">cJSON PROOF: WHERE 630,000 LINES GO</text>
+
+    <!-- the thin sliver -->
+    <rect x="0" y="34" width="6" height="44" rx="2" style="fill:var(--accent)"/>
+    <text x="14" y="52" style="fill:var(--accent);font:600 11px var(--mono)">cJSON's own parser, 391 lines of C</text>
+    <text x="14" y="70" style="fill:var(--fg-faint);font:400 11px var(--sans)">this is the code you actually care about</text>
+
+    <!-- the rest, broken into parts -->
+    <text x="0" y="112" style="fill:var(--fg-muted);font:600 11px var(--mono);letter-spacing:.08em">AND WHAT FILLS THE REST</text>
+
+    <g>
+      <!-- bars grow from origin -->
+      <rect x="0" y="128" width="470" height="22" rx="4" style="fill:var(--surface);stroke:var(--border);transform-origin:0 139">
+        <animateTransform attributeName="transform" type="scale" from="0 1" to="1 1" dur="1s" fill="freeze"/>
+      </rect>
+      <text x="10" y="143" style="fill:var(--fg-muted);font:500 10px var(--mono)">C runtime start-up</text>
+
+      <rect x="0" y="158" width="520" height="22" rx="4" style="fill:var(--surface);stroke:var(--border);transform-origin:0 169">
+        <animateTransform attributeName="transform" type="scale" from="0 1" to="1 1" dur="1s" begin="0.15s" fill="freeze"/>
+      </rect>
+      <text x="10" y="173" style="fill:var(--fg-muted);font:500 10px var(--mono)">allocator and printf</text>
+
+      <rect x="0" y="188" width="600" height="22" rx="4" style="fill:var(--surface);stroke:var(--border);transform-origin:0 199">
+        <animateTransform attributeName="transform" type="scale" from="0 1" to="1 1" dur="1s" begin="0.3s" fill="freeze"/>
+      </rect>
+      <text x="10" y="203" style="fill:var(--fg-muted);font:500 10px var(--mono)">AddressSanitizer's own runtime</text>
+
+      <rect x="0" y="218" width="640" height="22" rx="4" style="fill:var(--warn-wash);stroke:var(--warn);transform-origin:0 229">
+        <animateTransform attributeName="transform" type="scale" from="0 1" to="1 1" dur="1s" begin="0.45s" fill="freeze"/>
+      </rect>
+      <text x="10" y="233" style="fill:var(--fg);font:500 10px var(--mono)">the fuzz driver: re-proven, never shared</text>
+    </g>
+  </svg>
+  </div>
+  <p class="dcap">Most of the proof is shared infrastructure that gets re-proven per library. Sharing it across proofs is the single biggest cost lever available.</p>
+
+  <div class="matters">
+    <span class="label">Why this matters</span>
+    <p>It also tells you where to push if you ever run this yourself. Proof reuse is the lever. Anthropic measured it: agents allowed to copy each other's finished proofs needed 17% fewer tokens, and some that failed solo succeeded once they could see a neighbour's work.[1] Most of a proof is code every program contains, so the overlap is enormous by construction.</p>
+  </div>
+
+  <h3>4. The bugs fuzzing structurally cannot find.</h3>
+  <p class="body-text">
+    <p>Fuzzers mutate inputs and cap out around 1 MB by default. They find the bugs reachable from the inputs they happened to generate. Attempting a proof surfaces a different set entirely.[1]</p>
+    <p>Claude found a counter underflow leading to an out-of-bounds write that only triggered on inputs near 20 MB with one rare layout. An out-of-bounds read in an image decoder needing a 64 MB input and over 2 GB of memory. An out-of-bounds read requiring a particular call sequence across two handles to the same file. And a logic bug that never crashes at all, where a file-loading restriction was not consistently enforced.</p>
+  </p>
+
+  <div class="diagram">
+  <svg viewBox="0 0 720 240" role="img" aria-labelledby="d4Title">
+    <title id="d4Title">Input space reachable by fuzzing versus by proof</title>
+    <desc id="d4Desc">A two-dimensional input space plot. A small cluster near the origin represents the inputs a fuzzer generates. A distant point in the upper right represents a bug requiring a 20 megabyte input with a rare layout, which sits outside the fuzzer's reach.</desc>
+
+    <line x1="70" y1="196" x2="680" y2="196" style="stroke:var(--border-strong)" stroke-width="1"/>
+    <line x1="70" y1="196" x2="70" y2="26" style="stroke:var(--border-strong)" stroke-width="1"/>
+    <text x="375" y="222" text-anchor="middle" style="fill:var(--fg-muted);font:500 11px var(--mono)">input size →</text>
+    <text x="34" y="112" text-anchor="middle" style="fill:var(--fg-muted);font:500 11px var(--mono)" transform="rotate(-90 34 112)">structural variety →</text>
+
+    <!-- fuzzer reach -->
+    <ellipse cx="150" cy="168" rx="70" ry="24" style="fill:var(--fg-faint);opacity:0.18">
+      <animate attributeName="opacity" values="0.12;0.26;0.12" dur="4s" repeatCount="indefinite"/>
+    </ellipse>
+    <text x="150" y="172" text-anchor="middle" style="fill:var(--fg-muted);font:600 10px var(--mono)">fuzzer reaches this</text>
+    <text x="150" y="188" text-anchor="middle" style="fill:var(--fg-faint);font:400 9px var(--mono)">mutated inputs, typically ≤ 1 MB</text>
+
+    <!-- a few sampled points -->
+    <circle cx="128" cy="160" r="3" style="fill:var(--fg-faint)"/>
+    <circle cx="168" cy="174" r="3" style="fill:var(--fg-faint)"/>
+    <circle cx="148" cy="180" r="3" style="fill:var(--fg-faint)"/>
+
+    <!-- the far bug -->
+    <g>
+      <circle cx="596" cy="62" r="9" style="fill:var(--danger);opacity:0.25">
+        <animate attributeName="r" values="7;12;7" dur="2.6s" repeatCount="indefinite"/>
+        <animate attributeName="opacity" values="0.3;0.08;0.3" dur="2.6s" repeatCount="indefinite"/>
+      </circle>
+      <circle cx="596" cy="62" r="5" style="fill:var(--danger)"/>
+      <path d="M 560 82 Q 520 130 480 180" style="fill:none;stroke:var(--danger);stroke-width:1.5;stroke-dasharray:4 5;opacity:.8"/>
+      <text x="616" y="56" style="fill:var(--danger);font:600 10px var(--mono)">20 MB input</text>
+      <text x="616" y="70" style="fill:var(--fg-muted);font:400 10px var(--sans)">one rare layout</text>
+    </g>
+
+    <text x="596" y="98" text-anchor="middle" style="fill:var(--fg-faint);font:400 10px var(--mono)">counter underflow</text>
+    <text x="596" y="112" text-anchor="middle" style="fill:var(--fg-faint);font:400 10px var(--mono)">OOB write</text>
+  </svg>
+  </div>
+  <p class="dcap">Fuzzing samples a dense region. Proofs cover the whole space, including the corner nothing was going to stumble into.</p>
+
+  <h3>5. Where the agent proofs stop scaling.</h3>
+  <p class="body-text">
+    <p>This is the most useful section in the appendix, and almost nobody read it.[2] Claude's proofs are correct, since the checker validates them. But they're written in a style that will not scale.</p>
+    <p>The pattern: the agent spells out every register's contents, every integer conversion, every individual address being distinct from every other, every branch in a function. All of it is genuinely required to reason about execution. A human proof engineer would have stopped at step one and abstracted: a calling convention, a set of disjoint pointers, an allocator model, one lemma covering every branch. Claude sometimes does introduce these. When it does, proof size drops, but only modestly, and the verbosity persists.</p>
+    <p>There's a second thing worth noticing. Asked to prove two binaries equivalent, the agents usually didn't prove equivalence directly. They first synthesized a short spec describing what the program can output, then proved both binaries conform to it. Median spec: about 110 lines, against a median program of 86 KB.[2] That is a genuinely interesting capability and nobody asked for it.</p>
+  </p>
+
+  <div class="diagram">
+  <svg viewBox="0 0 720 250" role="img" aria-labelledby="d5Title">
+    <title id="d5Title">Agent proof style versus human proof style</title>
+    <desc id="d5Desc">Two columns of proof lines. The agent column is long, repetitive and explicit at the instruction level. The human column is short and consists of named abstractions that each cover many instructions.</desc>
+
+    <text x="0" y="18" style="fill:var(--fg-muted);font:600 11px var(--mono);letter-spacing:.08em">AGENT STYLE</text>
+    <text x="380" y="18" style="fill:var(--fg-muted);font:600 11px var(--mono);letter-spacing:.08em">HUMAN STYLE</text>
+
+    <!-- agent lines: long, repetitive -->
+    <g>
+      <rect x="0" y="32" width="330" height="6" rx="3" style="fill:var(--fg-faint);opacity:0.5"/>
+      <rect x="0" y="46" width="318" height="6" rx="3" style="fill:var(--fg-faint);opacity:0.5"/>
+      <rect x="0" y="60" width="326" height="6" rx="3" style="fill:var(--fg-faint);opacity:0.5"/>
+      <rect x="0" y="74" width="304" height="6" rx="3" style="fill:var(--fg-faint);opacity:0.5"/>
+      <rect x="0" y="88" width="329" height="6" rx="3" style="fill:var(--fg-faint);opacity:0.5"/>
+      <rect x="0" y="102" width="312" height="6" rx="3" style="fill:var(--fg-faint);opacity:0.5"/>
+      <rect x="0" y="116" width="322" height="6" rx="3" style="fill:var(--fg-faint);opacity:0.5"/>
+      <rect x="0" y="130" width="298" height="6" rx="3" style="fill:var(--fg-faint);opacity:0.5"/>
+      <rect x="0" y="144" width="327" height="6" rx="3" style="fill:var(--fg-faint);opacity:0.5"/>
+      <rect x="0" y="158" width="306" height="6" rx="3" style="fill:var(--fg-faint);opacity:0.5"/>
+      <rect x="0" y="172" width="325" height="6" rx="3" style="fill:var(--fg-faint);opacity:0.5"/>
+      <rect x="0" y="186" width="300" height="6" rx="3" style="fill:var(--fg-faint);opacity:0.5"/>
+      <rect x="0" y="200" width="320" height="6" rx="3" style="fill:var(--fg-faint);opacity:0.5"/>
+      <rect x="0" y="214" width="309" height="6" rx="3" style="fill:var(--fg-faint);opacity:0.5"/>
+    </g>
+    <text x="0" y="238" style="fill:var(--fg-faint);font:400 10px var(--mono)">reg contents · every conversion · every address · every branch</text>
+
+    <!-- human lines: few, named, wide coverage -->
+    <g>
+      <rect x="380" y="32" width="290" height="14" rx="5" style="fill:var(--accent);opacity:0.85">
+        <animate attributeName="opacity" values="0.5;0.95;0.5" dur="4s" repeatCount="indefinite"/>
+      </rect>
+      <text x="386" y="43" style="fill:var(--accent-ink);font:600 9px var(--mono)">calling_convention</text>
+
+      <rect x="380" y="58" width="290" height="14" rx="5" style="fill:var(--accent);opacity:0.7"/>
+      <text x="386" y="69" style="fill:var(--accent-ink);font:600 9px var(--mono)">disjoint_pointers</text>
+
+      <rect x="380" y="84" width="290" height="14" rx="5" style="fill:var(--accent);opacity:0.55"/>
+      <text x="386" y="95" style="fill:var(--accent-ink);font:600 9px var(--mono)">allocator_model</text>
+
+      <rect x="380" y="110" width="290" height="14" rx="5" style="fill:var(--accent);opacity:0.45"/>
+      <text x="386" y="121" style="fill:var(--accent-ink);font:600 9px var(--mono)">branch_uniformity</text>
+
+      <rect x="380" y="136" width="290" height="14" rx="5" style="fill:var(--accent);opacity:0.35"/>
+      <text x="386" y="147" style="fill:var(--accent-ink);font:600 9px var(--mono)">framing_rule</text>
+
+      <rect x="380" y="162" width="290" height="14" rx="5" style="fill:var(--accent);opacity:0.28"/>
+      <text x="386" y="173" style="fill:var(--accent-ink);font:600 9px var(--mono)">stack_contents</text>
+    </g>
+    <text x="380" y="200" style="fill:var(--fg-muted);font:500 10px var(--mono)">five names cover the same ground</text>
+    <text x="380" y="216" style="fill:var(--fg-faint);font:400 10px var(--sans)">each abstraction generalises over</text>
+    <text x="380" y="230" style="fill:var(--fg-faint);font:400 10px var(--sans)">many instructions at once</text>
+  </svg>
+  </div>
+  <p class="dcap">Both columns prove the same theorem. Only one of them survives contact with a program twenty times the size.</p>
+
+  <div class="matters">
+    <span class="label">Why this matters</span>
+    <p>Prior agent verification work, cited in the appendix, hit exactly this wall and scaling required better modular abstractions.[2] The open research question is whether agents can be taught to invent good abstractions unprompted, or whether this needs expert proof engineers in the loop. That question decides whether the cost curve keeps falling. Right now it isn't settled, and pretending otherwise in a design doc would be a mistake.</p>
+  </div>
+
+  <h3>6. The cost curve, and the one assumption that quietly limits all of it.</h3>
+  <p class="body-text">
+    <p>Two things are pushing cost down. Newer models are cheaper on the same work: Opus 5.5 proved half of 36 benchmark tasks using about 40% fewer tokens than Opus 5.[1] And reuse, covered above, gives another 17%. Dependencies also follow a power law, so verifying a small set of shared libraries makes a large amount of downstream software provable for free.</p>
+    <p>The limitation is worth sitting with. These proofs assume single-threaded static binaries, a fixed memory budget, RISC-V, and Linux. Most people deploy on x86 or ARM, dynamically linked against glibc. ASan doesn't catch every memory safety bug, not every entry point was verified, and verifying all entry points still doesn't cover dead code or callers who misuse your API. A proof checker can tell you the code matches the spec. It cannot tell you the spec matches reality.</p>
+  </p>
+
+  <div class="diagram">
+  <svg viewBox="0 0 720 250" role="img" aria-labelledby="d6Title">
+    <title id="d6Title">The assumption boundary between what is proved and what is deployed</title>
+    <desc id="d6Desc">A boundary line separates the proved world of single-threaded static RISC-V binaries linked against musl from the deployed world of multi-threaded dynamically linked x86 and ARM binaries using glibc. The proved region is smaller than the deployed region.</desc>
+
+    <rect x="0" y="30" width="360" height="180" rx="12" style="fill:var(--accent-wash);stroke:var(--accent)"/>
+    <text x="24" y="56" style="fill:var(--accent);font:600 11px var(--mono);letter-spacing:.07em">PROVED</text>
+    <text x="24" y="86" style="fill:var(--fg);font:500 13px var(--sans)">single-threaded</text>
+    <text x="24" y="108" style="fill:var(--fg);font:500 13px var(--sans)">static binary</text>
+    <text x="24" y="130" style="fill:var(--fg);font:500 13px var(--sans)">RISC-V</text>
+    <text x="24" y="152" style="fill:var(--fg);font:500 13px var(--sans)">musl libc</text>
+    <text x="24" y="174" style="fill:var(--fg);font:500 13px var(--sans)">fixed memory budget</text>
+    <text x="24" y="196" style="fill:var(--fg-faint);font:400 11px var(--mono)">123 libraries · 239 entry points</text>
+
+    <rect x="376" y="30" width="344" height="180" rx="12" style="fill:var(--surface);stroke:var(--border)"/>
+    <text x="400" y="56" style="fill:var(--fg-faint);font:600 11px var(--mono);letter-spacing:.07em">DEPLOYED</text>
+    <text x="400" y="86" style="fill:var(--fg-muted);font:500 13px var(--sans)">multi-threaded</text>
+    <text x="400" y="108" style="fill:var(--fg-muted);font:500 13px var(--sans)">dynamically linked</text>
+    <text x="400" y="130" style="fill:var(--fg-muted);font:500 13px var(--sans)">x86 · ARM</text>
+    <text x="400" y="152" style="fill:var(--fg-muted);font:500 13px var(--sans)">glibc</text>
+    <text x="400" y="174" style="fill:var(--fg-muted);font:500 13px var(--sans)">unbounded by any budget</text>
+    <text x="400" y="196" style="fill:var(--fg-faint);font:400 11px var(--mono)">what users actually run</text>
+
+    <line x1="368" y1="20" x2="368" y2="222" style="stroke:var(--fg);stroke-width:1.5;stroke-dasharray:6 4">
+      <animate attributeName="stroke-dashoffset" values="20;0" dur="3s" repeatCount="indefinite"/>
+    </line>
+
+    <text x="0" y="240" style="fill:var(--fg-faint);font:400 11px var(--sans)">The remaining bugs live either inside the trusted components or outside the proved scope. Both are a far smaller search than every line the proofs cover.</text>
+  </svg>
+  </div>
+  <p class="dcap">Being honest about this edge is what separates a real security argument from a marketing one. The gap is named, bounded, and shrinking.</p>
+
+  <div class="stats">
+    <div class="stat"><div class="n">123</div><div class="l">libraries proved</div></div>
+    <div class="stat"><div class="n">239</div><div class="l">entry points closed</div></div>
+    <div class="stat"><div class="n">180M</div><div class="l">lines of checked proof</div></div>
+    <div class="stat"><div class="n">40%</div><div class="l">fewer tokens, one gen newer</div></div>
+  </div>
+
+  <div class="diagram">
+  <svg viewBox="0 0 720 210" role="img" aria-labelledby="d7Title">
+    <title id="d7Title">The shared proof workspace and its effect on token cost</title>
+    <desc id="d7Desc">Four agents work in parallel on separate library proofs. A shared workspace below them holds a common proof of runtime setup. Arrows rise from the workspace into each agent, showing that later proofs inherit shared work instead of re-proving it, costing seventeen percent fewer tokens.</desc>
+
+    <text x="0" y="16" style="fill:var(--fg-muted);font:600 11px var(--mono);letter-spacing:.08em">THE REUSE MULTIPLIER</text>
+
+    <!-- shared workspace -->
+    <rect x="0" y="130" width="620" height="52" rx="10" style="fill:var(--accent-wash);stroke:var(--accent)">
+      <animate attributeName="opacity" values="0.6;1;0.6" dur="5s" repeatCount="indefinite"/>
+    </rect>
+    <text x="310" y="152" text-anchor="middle" style="fill:var(--accent);font:600 12px var(--mono)">SHARED PROOF WORKSPACE</text>
+    <text x="310" y="170" text-anchor="middle" style="fill:var(--fg-muted);font:400 11px var(--mono)">C runtime · allocator · ASan setup: proved once, inherited by everyone</text>
+
+    <!-- agents -->
+    <g>
+      <rect x="0" y="34" width="140" height="40" rx="9" style="fill:var(--surface);stroke:var(--border)"/>
+      <text x="70" y="52" text-anchor="middle" style="fill:var(--fg-muted);font:500 11px var(--mono)">agent A</text>
+      <text x="70" y="67" text-anchor="middle" style="fill:var(--fg-faint);font:400 10px var(--mono)">libcups</text>
+
+      <rect x="160" y="34" width="140" height="40" rx="9" style="fill:var(--surface);stroke:var(--border)"/>
+      <text x="230" y="52" text-anchor="middle" style="fill:var(--fg-muted);font:500 11px var(--mono)">agent B</text>
+      <text x="230" y="67" text-anchor="middle" style="fill:var(--fg-faint);font:400 10px var(--mono)">freerdp</text>
+
+      <rect x="320" y="34" width="140" height="40" rx="9" style="fill:var(--surface);stroke:var(--border)"/>
+      <text x="390" y="52" text-anchor="middle" style="fill:var(--fg-muted);font:500 11px var(--mono)">agent C</text>
+      <text x="390" y="67" text-anchor="middle" style="fill:var(--fg-faint);font:400 10px var(--mono)">libzmq</text>
+
+      <rect x="480" y="34" width="140" height="40" rx="9" style="fill:var(--surface);stroke:var(--border)"/>
+      <text x="550" y="52" text-anchor="middle" style="fill:var(--fg-muted);font:500 11px var(--mono)">agent D</text>
+      <text x="550" y="67" text-anchor="middle" style="fill:var(--fg-faint);font:400 10px var(--mono)">libexpat</text>
+    </g>
+
+    <!-- flow up from workspace -->
+    <g>
+      <path d="M 70 130 L 70 74" style="fill:none;stroke:var(--accent);stroke-width:1.5;stroke-dasharray:5 5">
+        <animate attributeName="stroke-dashoffset" values="20;0" dur="2s" repeatCount="indefinite"/>
+      </path>
+      <polygon points="70,68 65,80 75,80" style="fill:var(--accent)"/>
+
+      <path d="M 230 130 L 230 74" style="fill:none;stroke:var(--accent);stroke-width:1.5;stroke-dasharray:5 5">
+        <animate attributeName="stroke-dashoffset" values="20;0" dur="2s" begin="0.4s" repeatCount="indefinite"/>
+      </path>
+      <polygon points="230,68 225,80 235,80" style="fill:var(--accent)"/>
+
+      <path d="M 390 130 L 390 74" style="fill:none;stroke:var(--accent);stroke-width:1.5;stroke-dasharray:5 5">
+        <animate attributeName="stroke-dashoffset" values="20;0" dur="2s" begin="0.8s" repeatCount="indefinite"/>
+      </path>
+      <polygon points="390,68 385,80 395,80" style="fill:var(--accent)"/>
+
+      <path d="M 550 130 L 550 74" style="fill:none;stroke:var(--accent);stroke-width:1.5;stroke-dasharray:5 5">
+        <animate attributeName="stroke-dashoffset" values="20;0" dur="2s" begin="1.2s" repeatCount="indefinite"/>
+      </path>
+      <polygon points="550,68 545,80 555,80" style="fill:var(--accent)"/>
+    </g>
+
+    <text x="638" y="150" style="fill:var(--accent);font:600 12px var(--mono)">−17%</text>
+    <text x="638" y="168" style="fill:var(--fg-faint);font:400 10px var(--mono)">tokens</text>
+  </svg>
+  </div>
+  <p class="dcap">Most of any proof is code every program contains, so the overlap is structural rather than accidental. Sharing it is the largest single cost lever available today.</p>
+</section>
+
+<section>
+  <p class="kicker">Common confusions</p>
+  <h2>Four things people get wrong about this</h2>
+
+  <div class="confusions">
+    <div class="conf">
+      <div class="conf-h"><span class="conf-n">01</span><h3>"Formally verified" means bug-free</h3></div>
+      <p class="wrong">The proof shows the binary satisfies the spec. The spec was written by someone, and nothing checks whether it describes reality.</p>
+      <p class="right">When bugs show up in verified code, it's because the spec or the assumed machine semantics diverges from the real world. That's a much more useful situation than "there are bugs somewhere", because you know exactly where to look. The three things a human must trust are the Rocq checker, the RISC-V semantics, and the Linux process semantics.[1]</p>
+    </div>
+
+    <div class="conf">
+      <div class="conf-h"><span class="conf-n">02</span><h3>The proofs need expert review</h3></div>
+      <p class="wrong">180 million lines of Rocq can't possibly be human-checked, so the output is unauditable and therefore worthless.</p>
+      <p class="right">Nobody reviews the proofs. The checker does, and it rejects anything invalid. Review effort goes to the spec statement and the machine semantics instead. That's the entire point of the trusted-base argument: 180 million machine-checked lines cost you the same human attention as three hand-reviewed components.</p>
+    </div>
+
+    <div class="conf">
+      <div class="conf-h"><span class="conf-n">03</span><h3>This replaces fuzzing</h3></div>
+      <p class="wrong">Proofs strictly dominate, so fuzzing is now obsolete and teams should move off it.</p>
+      <p class="right">It's narrower and more expensive per target. ASan doesn't catch every memory safety bug, not every entry point got verified, and verifying all entry points still misses dead code and callers who misuse your API. Fuzzing is a sampler and proofs are exhaustive over a scope, but the sampler is currently far cheaper and covers the parts the proofs don't reach.[1]</p>
+    </div>
+
+    <div class="conf">
+      <div class="conf-h"><span class="conf-n">04</span><h3>The model is doing formal mathematics</h3></div>
+      <p class="wrong">Claude understands program semantics and reasons about correctness like a theorem prover.</p>
+      <p class="right">It generates candidate proof steps and iterates against the checker. Every accepted proof is mechanically validated by Rocq, not by Claude. The model's job is search, not judgment, and every claim of soundness comes from the checker. That's also why the format, the semantics and the checker are the only three things anyone needs to trust.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <p class="kicker">Where to go next</p>
+  <h2>Go read the actual artifacts</h2>
+
+  <div class="next">
+    <a href="https://github.com/theorem-labs/oss-verify-proofs" target="_blank" rel="noopener">
+      <div class="t">theorem-labs/oss-verify-proofs</div>
+      <p class="d">The released proofs. A subset that passed the checker, published so anyone can re-verify or build on them. Also includes the RISC-V and OS semantics that aren't already public. Start here, not with the blog post.</p>
+      <div class="u">github.com/theorem-labs/oss-verify-proofs</div>
+    </a>
+    <a href="https://arxiv.org/abs/2610.30432" target="_blank" rel="noopener">
+      <div class="t">TrustedCode (arXiv 2610.30432)</div>
+      <p class="d">Independent academic work that landed two days before the Anthropic post. Verifies AI-generated Python via WhyML and Why3, and reports the useful breakdown: 50% of failures are domain knowledge gaps, 30% syntactic, 20% semantic and type errors.</p>
+      <div class="u">arxiv.org/abs/2610.30432</div>
+    </a>
+    <a href="https://theorem.dev/oss-verify/" target="_blank" rel="noopener">
+      <div class="t">Theorem's oss-verify skill</div>
+      <p class="d">The actual pipeline, offered as a Claude skill for verifying your own project. The fastest way to find out whether any of this applies to a codebase you own is to point it at one library you already depend on.</p>
+      <div class="u">theorem.dev/oss-verify/</div>
+    </a>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <p class="mono">Day 26 of the explainer series. Built by Hermes using the explainer-builder skill.</p>
+    <p style="margin-top:12px;font-size:13px;">Sources: Anthropic's research post and its technical appendix (Oct 22, 2026), the Hacker News discussion, the released proof artifacts at theorem-labs, and arXiv 2610.30432.</p>
+  </div>
+</footer>
+
+</div>
+
+<script>
+(function(){
+  var btn = document.getElementById('themeBtn');
+  var root = document.documentElement;
+  function current(){
+    var a = root.getAttribute('data-theme');
+    if(a) return a;
+    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  }
+  btn.addEventListener('click', function(){
+    var next = current() === 'dark' ? 'light' : 'dark';
+    root.setAttribute('data-theme', next);
+    try{ localStorage.setItem('theme', next); }catch(e){}
+  });
+})();
+</script>
+</body>
+</html>
