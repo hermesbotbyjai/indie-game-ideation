@@ -1,0 +1,1077 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Declarative Attention: when the model names its own context window</title>
+<meta name="description" content="How Declarative Attention lets a language model emit &lt;global&gt;, &lt;focus&gt; and &lt;local&gt; tags so the inference engine skips most KV cache reads.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script>
+(function () {
+  try {
+    var t = localStorage.getItem('theme');
+    if (t === 'dark' || t === 'light') {
+      document.documentElement.setAttribute('data-theme', t);
+    } else if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
+      document.documentElement.setAttribute('data-theme', 'dark');
+    }
+  } catch (e) {}
+})();
+</script>
+<style>
+:root {
+  --bg: #ffffff;
+  --ink: #0d0d0d;
+  --ink-2: #333333;
+  --ink-3: #666666;
+  --ink-4: #888888;
+  --line: rgba(13,13,13,0.05);
+  --line-2: rgba(13,13,13,0.08);
+  --surface: #ffffff;
+  --surface-2: #fafafa;
+  --surface-3: #f5f5f5;
+  --brand: #18E299;
+  --brand-deep: #0fa76e;
+  --brand-tint: #d4fae8;
+  --warn: #c37d0d;
+  --info: #3772cf;
+  --err: #d45656;
+  --shadow: rgba(0,0,0,0.03) 0px 2px 4px;
+  --btn-shadow: rgba(0,0,0,0.06) 0px 1px 2px;
+  --hero-wash: radial-gradient(1100px 520px at 50% -8%, rgba(24,226,153,0.22), rgba(24,226,153,0.07) 42%, rgba(255,255,255,0) 72%);
+  --mono: 'Geist Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+}
+html[data-theme="dark"] {
+  --bg: #0d0d0d;
+  --ink: #ededed;
+  --ink-2: #c9c9c9;
+  --ink-3: #a0a0a0;
+  --ink-4: #7a7a7a;
+  --line: rgba(255,255,255,0.08);
+  --line-2: rgba(255,255,255,0.12);
+  --surface: #141414;
+  --surface-2: #191919;
+  --surface-3: #1f1f1f;
+  --brand: #2af5a8;
+  --brand-deep: #18E299;
+  --brand-tint: rgba(42,245,168,0.14);
+  --warn: #e0a33d;
+  --info: #6c9ee8;
+  --err: #e07a7a;
+  --shadow: rgba(0,0,0,0.4) 0px 2px 4px;
+  --btn-shadow: rgba(0,0,0,0.5) 0px 1px 2px;
+  --hero-wash: radial-gradient(1100px 520px at 50% -8%, rgba(42,245,168,0.16), rgba(42,245,168,0.05) 42%, rgba(13,13,13,0) 72%);
+}
+@media (prefers-color-scheme: dark) {
+  html:not([data-theme="light"]) {
+    --bg: #0d0d0d; --ink: #ededed; --ink-2: #c9c9c9; --ink-3: #a0a0a0; --ink-4: #7a7a7a;
+    --line: rgba(255,255,255,0.08); --line-2: rgba(255,255,255,0.12);
+    --surface: #141414; --surface-2: #191919; --surface-3: #1f1f1f;
+    --brand: #2af5a8; --brand-deep: #18E299; --brand-tint: rgba(42,245,168,0.14);
+    --warn: #e0a33d; --info: #6c9ee8; --err: #e07a7a;
+    --shadow: rgba(0,0,0,0.4) 0px 2px 4px; --btn-shadow: rgba(0,0,0,0.5) 0px 1px 2px;
+    --hero-wash: radial-gradient(1100px 520px at 50% -8%, rgba(42,245,168,0.16), rgba(42,245,168,0.05) 42%, rgba(13,13,13,0) 72%);
+  }
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  font-size: 17px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  transition: background-color 220ms ease, color 220ms ease;
+}
+.wrap { max-width: 1200px; margin: 0 auto; padding: 0 24px; }
+
+nav.top {
+  position: sticky; top: 0; z-index: 50;
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--line);
+}
+nav.top .wrap { display: flex; align-items: center; gap: 20px; height: 58px; }
+.brand { font-weight: 600; font-size: 15px; letter-spacing: -0.2px; color: var(--ink); text-decoration: none; white-space: nowrap; }
+.brand span { color: var(--brand-deep); }
+nav.top .links { display: flex; gap: 18px; margin-left: auto; }
+nav.top .links a {
+  font-size: 14px; font-weight: 500; color: var(--ink-2); text-decoration: none;
+  padding: 6px 0; border-bottom: 1px solid transparent; transition: color 160ms ease, border-color 160ms ease;
+}
+nav.top .links a:hover { color: var(--brand-deep); border-bottom-color: var(--brand); }
+#themeBtn {
+  margin-left: 8px; border: 1px solid var(--line-2); background: var(--surface); color: var(--ink);
+  font-family: var(--mono); font-size: 11px; font-weight: 500; letter-spacing: 0.6px; text-transform: uppercase;
+  border-radius: 9999px; padding: 7px 13px; cursor: pointer; transition: border-color 160ms ease, color 160ms ease;
+}
+#themeBtn:hover { border-color: var(--brand); color: var(--brand-deep); }
+#themeBtn:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+
+/* HERO */
+.hero { position: relative; padding: 96px 0 64px; overflow: hidden; }
+.hero::before {
+  content: ""; position: absolute; inset: 0; background: var(--hero-wash); pointer-events: none; z-index: 0;
+}
+.hero .wrap { position: relative; z-index: 1; text-align: center; }
+.chip {
+  display: inline-block; font-family: var(--mono); font-size: 11px; font-weight: 600;
+  letter-spacing: 0.6px; text-transform: uppercase; color: var(--brand-deep);
+  background: var(--brand-tint); border-radius: 9999px; padding: 5px 13px; margin-bottom: 22px;
+}
+.hero h1 {
+  margin: 0 auto; max-width: 17ch; font-size: 64px; line-height: 1.15; font-weight: 600; letter-spacing: -1.28px;
+}
+.hero .sub {
+  margin: 22px auto 0; max-width: 60ch; font-size: 18px; line-height: 1.5; color: var(--ink-3);
+}
+.get {
+  margin: 40px auto 0; max-width: 720px; display: grid; grid-template-columns: repeat(2, 1fr);
+  gap: 0; text-align: left; border: 1px solid var(--line); border-radius: 16px; background: var(--surface);
+  box-shadow: var(--shadow); overflow: hidden;
+}
+.get div { padding: 18px 22px; border-bottom: 1px solid var(--line); display: flex; gap: 12px; align-items: flex-start; }
+.get div:nth-child(odd) { border-right: 1px solid var(--line); }
+.get div:nth-last-child(-n+2) { border-bottom: none; }
+.get .k {
+  font-family: var(--mono); font-size: 10px; font-weight: 600; letter-spacing: 0.6px; text-transform: uppercase;
+  color: var(--brand-deep); padding-top: 3px; white-space: nowrap;
+}
+.get .v { font-size: 14px; color: var(--ink-2); line-height: 1.45; }
+
+/* SECTION SHELL */
+section { padding: 72px 0; border-top: 1px solid var(--line); }
+.tag {
+  font-family: var(--mono); font-size: 11px; font-weight: 600; letter-spacing: 0.6px; text-transform: uppercase;
+  color: var(--brand-deep); margin: 0 0 14px; display: block;
+}
+h2 { margin: 0 0 8px; font-size: 40px; line-height: 1.1; font-weight: 600; letter-spacing: -0.8px; max-width: 22ch; }
+h3 { margin: 0 0 10px; font-size: 24px; line-height: 1.3; font-weight: 600; letter-spacing: -0.24px; }
+.lede { margin: 0 0 8px; max-width: 68ch; font-size: 18px; line-height: 1.55; color: var(--ink-2); }
+p { margin: 0 0 18px; max-width: 68ch; color: var(--ink-2); }
+p:last-child { margin-bottom: 0; }
+code {
+  font-family: var(--mono); font-size: 0.88em; background: var(--surface-3); border: 1px solid var(--line);
+  border-radius: 4px; padding: 1px 5px; color: var(--ink);
+}
+.tagcode {
+  font-family: var(--mono); font-size: 0.88em; background: var(--brand-tint); color: var(--brand-deep);
+  border-radius: 4px; padding: 1px 5px; font-weight: 500;
+}
+a.ext { color: var(--ink); font-weight: 500; text-decoration: underline; text-decoration-color: var(--line-2); text-underline-offset: 3px; }
+a.ext:hover { color: var(--brand-deep); text-decoration-color: var(--brand); }
+
+/* ONE-SENTENCE MODEL */
+.model {
+  margin: 28px 0 0; padding: 28px 30px; border: 1px solid var(--line); border-radius: 16px;
+  background: var(--surface); box-shadow: var(--shadow); border-left: 3px solid var(--brand);
+}
+.model .lab { font-family: var(--mono); font-size: 11px; font-weight: 600; letter-spacing: 0.6px; text-transform: uppercase; color: var(--brand-deep); margin-bottom: 12px; }
+.model p { font-size: 19px; line-height: 1.5; color: var(--ink); margin: 0; max-width: none; }
+
+/* FIGURES */
+figure { margin: 32px 0 0; }
+figure.h-wide { max-width: 760px; }
+figure.h-mid { max-width: 640px; }
+figcaption {
+  margin-top: 12px; font-size: 13px; color: var(--ink-4); line-height: 1.5; max-width: 68ch;
+}
+figcaption .mono { font-family: var(--mono); font-size: 11px; letter-spacing: 0.4px; text-transform: uppercase; color: var(--ink-3); }
+
+/* WHY THIS MATTERS */
+.why {
+  margin: 26px 0 0; padding: 18px 20px 18px 22px; border-radius: 12px;
+  background: var(--surface-2); border: 1px solid var(--line); max-width: 68ch;
+}
+.why .lab {
+  font-family: var(--mono); font-size: 10px; font-weight: 600; letter-spacing: 0.6px; text-transform: uppercase;
+  color: var(--brand-deep); margin-bottom: 8px;
+}
+.why p { font-size: 15px; color: var(--ink-2); margin: 0; }
+
+/* WALKTHROUGH */
+.walk { border-top: 1px solid var(--line); padding-top: 56px; }
+.walk > .wrap > h2 { margin-bottom: 12px; }
+.step { padding: 44px 0; border-bottom: 1px solid var(--line); }
+.step:last-child { border-bottom: none; padding-bottom: 8px; }
+.step .num {
+  font-family: var(--mono); font-size: 11px; font-weight: 600; letter-spacing: 0.6px; text-transform: uppercase;
+  color: var(--ink-4); display: block; margin-bottom: 12px;
+}
+.step h3 { margin-bottom: 14px; }
+.step .cols { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 40px; align-items: start; }
+@media (max-width: 900px) { .step .cols { grid-template-columns: 1fr; gap: 26px; } }
+
+/* CONFUSIONS */
+.conf { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 20px; margin-top: 28px; }
+@media (max-width: 820px) { .conf { grid-template-columns: 1fr; } }
+.conf .card {
+  border: 1px solid var(--line); border-radius: 16px; padding: 24px; background: var(--surface); box-shadow: var(--shadow);
+}
+.conf .card .n {
+  font-family: var(--mono); font-size: 11px; font-weight: 600; letter-spacing: 0.6px; text-transform: uppercase;
+  color: var(--brand-deep); margin-bottom: 10px;
+}
+.conf .card .wrong { font-size: 16px; font-weight: 600; color: var(--ink); margin: 0 0 12px; letter-spacing: -0.2px; }
+.conf .card .right { font-size: 15px; color: var(--ink-2); margin: 0; padding-top: 12px; border-top: 1px solid var(--line); }
+.conf .card .right b { color: var(--ink); font-weight: 600; }
+
+/* NEXT */
+.next { list-style: none; padding: 0; margin: 28px 0 0; display: grid; gap: 14px; max-width: 760px; }
+.next li { border: 1px solid var(--line); border-radius: 16px; padding: 20px 22px; background: var(--surface); box-shadow: var(--shadow); }
+.next .t { font-size: 17px; font-weight: 600; letter-spacing: -0.2px; margin: 0 0 6px; }
+.next .d { font-size: 14px; color: var(--ink-3); margin: 0 0 8px; }
+.next .u { font-family: var(--mono); font-size: 12px; letter-spacing: 0.4px; color: var(--brand-deep); }
+
+footer { border-top: 1px solid var(--line); padding: 40px 0 56px; }
+footer p { font-size: 13px; color: var(--ink-4); margin: 0; max-width: none; }
+
+/* SVG token classes */
+.t-sunk   { fill: var(--surface-3); stroke: var(--line-2); }
+.t-ctx    { fill: var(--surface-2); stroke: var(--line-2); }
+.t-active { fill: var(--brand-tint); stroke: var(--brand); }
+.t-label  { fill: var(--ink); font-family: 'Inter', sans-serif; font-size: 13px; }
+.t-mlabel { fill: var(--ink-3); font-family: 'Geist Mono', monospace; font-size: 11px; letter-spacing: 0.6px; }
+.t-slabel { fill: var(--ink-2); font-family: 'Inter', sans-serif; font-size: 11.5px; }
+.t-line   { stroke: var(--line-2); }
+.t-acc    { stroke: var(--brand); }
+.t-ink    { stroke: var(--ink-3); }
+.t-dim    { fill: var(--ink-4); }
+
+@keyframes dashmove { to { stroke-dashoffset: -24; } }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.42; } }
+@keyframes softin { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@keyframes growx { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+@keyframes rise { from { transform: translateY(0); opacity: 0; } to { transform: translateY(-9px); opacity: 1; } }
+@keyframes swipemove { 0% { transform: translateX(0); } 50% { transform: translateX(30px); } 100% { transform: translateX(0); } }
+
+.svg-anim .scan { animation: dashmove 1.4s linear infinite; }
+.svg-anim .pulse { animation: pulse 2.2s ease-in-out infinite; }
+.svg-anim .fadein { animation: softin 400ms ease both; }
+.svg-anim .bar { animation: growx 700ms cubic-bezier(.2,.7,.3,1) both; transform-origin: left center; }
+.svg-anim .tag { animation: rise 500ms ease both; }
+
+/* SMIL is not governed by prefers-reduced-motion, so pause it explicitly.
+   Freezing <animate> at its base attribute values leaves a static, readable diagram. */
+@media (prefers-reduced-motion: reduce) {
+  svg animate, svg animateTransform, svg animateMotion { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; }
+  .svg-anim .scan { stroke-dashoffset: 0; }
+  .svg-anim .bar { transform: scaleX(1); }
+  .svg-anim .tag { transform: none; opacity: 1; }
+}
+
+/* RESPONSIVE */
+@media (max-width: 768px) {
+  body { font-size: 16px; }
+  .wrap { padding: 0 24px; }
+  nav.top .wrap { height: 54px; gap: 12px; }
+  nav.top .links { display: none; }
+  #themeBtn { margin-left: auto; }
+  .hero { padding: 56px 0 40px; }
+  .hero h1 { font-size: 44px; letter-spacing: -0.9px; max-width: 100%; }
+  .hero .sub { font-size: 17px; margin-top: 18px; }
+  .get { grid-template-columns: 1fr; margin-top: 32px; }
+  .get div { border-right: none !important; border-bottom: 1px solid var(--line) !important; }
+  .get div:last-child { border-bottom: none !important; }
+  section { padding: 48px 0; }
+  h2 { font-size: 32px; letter-spacing: -0.6px; max-width: 100%; }
+  h3 { font-size: 21px; }
+  .lede { font-size: 17px; }
+  .model { padding: 22px 20px; }
+  .model p { font-size: 17px; }
+  .step { padding: 32px 0; }
+  .step .cols { grid-template-columns: 1fr; gap: 24px; }
+  .conf { grid-template-columns: 1fr; }
+  figure.h-wide, figure.h-mid { max-width: 100%; }
+  figcaption { font-size: 12.5px; }
+  .next li { padding: 18px; }
+}
+@media (max-width: 420px) {
+  .hero h1 { font-size: 38px; }
+  h2 { font-size: 28px; }
+  .chip { font-size: 10px; }
+}
+</style>
+</head>
+<body>
+
+<nav class="top">
+  <div class="wrap">
+    <a class="brand" href="#top">DA<span>·</span>Declarative Attention</a>
+    <div class="links">
+      <a href="#model">Model</a>
+      <a href="#diagram">Diagram</a>
+      <a href="#walk">Walkthrough</a>
+      <a href="#confusions">Confusions</a>
+      <a href="#next">Next</a>
+    </div>
+    <button id="themeBtn" type="button" aria-label="Toggle dark mode">Dark</button>
+  </div>
+</nav>
+
+<header class="hero" id="top">
+  <div class="wrap">
+    <span class="chip">Long-context inference · arXiv 2609.02737</span>
+    <h1>When the model names its own context window</h1>
+    <p class="sub">
+      Declarative Attention turns attention selection from something the serving engine guesses
+      into something the model writes down. The engine reads the plan straight off the output
+      tokens and skips the KV cache blocks that plan says are irrelevant.
+    </p>
+
+    <div class="get">
+      <div><span class="k">Problem</span><span class="v">Every decoding step reads the whole KV cache, even when 99% of it is noise.</span></div>
+      <div><span class="k">Move</span><span class="v">The model emits <code>&lt;global&gt;</code>, <code>&lt;focus&gt;</code>, or <code>&lt;local&gt;</code> tags mid-reasoning.</span></div>
+      <div><span class="k">Mechanism</span><span class="v">A tag state machine turns those tags into a per-step attention mask.</span></div>
+      <div><span class="k">Result</span><span class="v">20-46% fewer attended tokens for 1.4-2.1 points of accuracy.</span></div>
+    </div>
+  </div>
+</header>
+
+<section id="model">
+  <div class="wrap">
+    <span class="tag">The model in one sentence</span>
+    <div class="model">
+      <div class="lab">One sentence, and that is the whole idea</div>
+      <p>
+        The model writes its attention plan into its own output as
+        <span class="tagcode">&lt;global&gt;</span>,
+        <span class="tagcode">&lt;focus chunk="7"&gt;</span>, or
+        <span class="tagcode">&lt;local&gt;</span> tags, and the inference engine parses
+        those tags like tool calls to build a KV cache mask, so the chunks the model just
+        declared irrelevant are never read from memory.
+      </p>
+    </div>
+  </div>
+</section>
+
+<section id="diagram">
+  <div class="wrap">
+    <span class="tag">Mental model</span>
+    <h2>The plan and the reads are the same tokens</h2>
+    <p class="lede">
+      Sparse attention has always been an inference problem: some separate scorer looks at
+      the activations and guesses which keys matter. Declarative Attention inverts that. The
+      model already knows, somewhere in its forward pass, which part of the context it needs
+      next. DA gives it a syntax for saying so out loud, and the serving runtime treats that
+      text as the schedule.
+    </p>
+
+    <figure class="h-wide">
+      <svg viewBox="0 0 760 430" width="100%" role="img" aria-label="Diagram of Declarative Attention: a long context split into magic chunks, a model emitting mode tags, and the runtime reading only the chunks those tags name.">
+        <defs>
+          <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" style="fill:var(--ink-3)"></path>
+          </marker>
+          <marker id="arrAcc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" style="fill:var(--brand)"></path>
+          </marker>
+        </defs>
+
+        <!-- context chunk row -->
+        <text x="30" y="34" style="fill:var(--ink-3);font-family:'Geist Mono',monospace;font-size:11px;letter-spacing:0.6px">CONTEXT · 8 MAGIC CHUNKS</text>
+        <g class="svg-anim">
+          <rect x="30" y="48" width="78" height="54" rx="10" style="fill:var(--surface-2);stroke:var(--line-2)"></rect>
+          <rect x="116" y="48" width="78" height="54" rx="10" style="fill:var(--surface-2);stroke:var(--line-2)"></rect>
+          <rect x="202" y="48" width="78" height="54" rx="10" style="fill:var(--surface-3);stroke:var(--line-2)"></rect>
+          <rect x="288" y="48" width="78" height="54" rx="10" style="fill:var(--surface-2);stroke:var(--line-2)"></rect>
+          <rect x="374" y="48" width="78" height="54" rx="10" style="fill:var(--surface-3);stroke:var(--line-2)"></rect>
+          <rect x="460" y="48" width="78" height="54" rx="10" style="fill:var(--surface-2);stroke:var(--line-2)"></rect>
+          <rect x="546" y="48" width="78" height="54" rx="10" style="fill:var(--surface-2);stroke:var(--line-2)"></rect>
+          <rect x="632" y="48" width="78" height="54" rx="10" style="fill:var(--brand-tint);stroke:var(--brand)"></rect>
+        </g>
+        <text x="69" y="80" text-anchor="middle" style="fill:var(--ink-3);font-family:'Geist Mono',monospace;font-size:11px">0</text>
+        <text x="155" y="80" text-anchor="middle" style="fill:var(--ink-3);font-family:'Geist Mono',monospace;font-size:11px">1</text>
+        <text x="241" y="80" text-anchor="middle" style="fill:var(--ink-3);font-family:'Geist Mono',monospace;font-size:11px">2</text>
+        <text x="327" y="80" text-anchor="middle" style="fill:var(--ink-3);font-family:'Geist Mono',monospace;font-size:11px">3</text>
+        <text x="413" y="80" text-anchor="middle" style="fill:var(--ink-3);font-family:'Geist Mono',monospace;font-size:11px">4</text>
+        <text x="499" y="80" text-anchor="middle" style="fill:var(--ink-3);font-family:'Geist Mono',monospace;font-size:11px">5</text>
+        <text x="585" y="80" text-anchor="middle" style="fill:var(--ink-3);font-family:'Geist Mono',monospace;font-size:11px">6</text>
+        <text x="671" y="80" text-anchor="middle" style="fill:var(--ink-3);font-family:'Geist Mono',monospace;font-size:11px;fill:var(--brand-deep)">7</text>
+        <text x="760" y="30" text-anchor="end" style="fill:var(--ink-4);font-family:'Inter',sans-serif;font-size:11px">chunk 7 = focused</text>
+
+        <!-- model -->
+        <rect x="30" y="140" width="680" height="92" rx="14" style="fill:var(--surface);stroke:var(--line-2)"></rect>
+        <text x="52" y="166" style="fill:var(--ink-3);font-family:'Geist Mono',monospace;font-size:11px;letter-spacing:0.6px">MODEL OUTPUT STREAM</text>
+        <g class="svg-anim">
+          <rect x="52" y="182" width="96" height="30" rx="8" style="fill:var(--brand-tint);stroke:var(--brand)"></rect>
+          <text x="100" y="202" text-anchor="middle" style="fill:var(--brand-deep);font-family:'Geist Mono',monospace;font-size:12px;font-weight:600">&lt;focus 7&gt;</text>
+          <rect x="158" y="182" width="330" height="30" rx="8" style="fill:var(--surface-3);stroke:var(--line-2)"></rect>
+          <text x="323" y="202" text-anchor="middle" style="fill:var(--ink-3);font-family:'Geist Mono',monospace;font-size:12px">the refund was issued on the 14th, not the 9th</text>
+          <rect x="498" y="182" width="88" height="30" rx="8" style="fill:var(--surface-3);stroke:var(--line-2)"></rect>
+          <text x="542" y="202" text-anchor="middle" style="fill:var(--ink-3);font-family:'Geist Mono',monospace;font-size:12px">&lt;local&gt;</text>
+        </g>
+        <text x="598" y="202" text-anchor="middle" style="fill:var(--ink-4);font-family:'Inter',sans-serif;font-size:11px"></text>
+
+        <!-- read arrows -->
+        <g class="svg-anim">
+          <line class="scan" x1="671" y1="104" x2="671" y2="138" style="stroke:var(--brand);stroke-width:2;stroke-dasharray:5 4"></line>
+          <line class="scan" x1="100" y1="214" x2="100" y2="248" style="stroke:var(--brand);stroke-width:2;stroke-dasharray:5 4"></line>
+          <line class="scan" x1="542" y1="214" x2="542" y2="248" style="stroke:var(--brand);stroke-width:2;stroke-dasharray:5 4"></line>
+        </g>
+
+        <!-- runtime -->
+        <rect x="30" y="250" width="680" height="88" rx="14" style="fill:var(--surface-2);stroke:var(--line-2)"></rect>
+        <text x="52" y="276" style="fill:var(--ink-3);font-family:'Geist Mono',monospace;font-size:11px;letter-spacing:0.6px">INFERENCE RUNTIME · TAG STATE MACHINE</text>
+        <g class="svg-anim">
+          <rect x="52" y="290" width="188" height="34" rx="8" style="fill:var(--surface);stroke:var(--line-2)"></rect>
+          <text x="146" y="312" text-anchor="middle" style="fill:var(--ink-2);font-family:'Geist Mono',monospace;font-size:11px">mask = {7} only</text>
+          <rect x="256" y="290" width="230" height="34" rx="8" style="fill:var(--surface);stroke:var(--line-2)"></rect>
+          <text x="371" y="312" text-anchor="middle" style="fill:var(--ink-2);font-family:'Geist Mono',monospace;font-size:11px">mask = {} · scaffold only</text>
+          <rect x="502" y="290" width="188" height="34" rx="8" style="fill:var(--surface);stroke:var(--line-2)"></rect>
+          <text x="596" y="312" text-anchor="middle" style="fill:var(--ink-3);font-family:'Geist Mono',monospace;font-size:11px">blocks 0-6 skipped</text>
+        </g>
+
+        <!-- KV cache blocks -->
+        <text x="30" y="376" style="fill:var(--ink-3);font-family:'Geist Mono',monospace;font-size:11px;letter-spacing:0.6px">HBM READ PER STEP</text>
+        <g class="svg-anim">
+          <rect class="bar" x="30" y="388" width="78" height="22" rx="6" style="fill:var(--surface-3);stroke:var(--line-2)"></rect>
+          <rect class="bar" x="116" y="388" width="78" height="22" rx="6" style="fill:var(--surface-3);stroke:var(--line-2)"></rect>
+          <rect class="bar" x="202" y="388" width="78" height="22" rx="6" style="fill:var(--surface-3);stroke:var(--line-2)"></rect>
+          <rect class="bar" x="288" y="388" width="78" height="22" rx="6" style="fill:var(--surface-3);stroke:var(--line-2)"></rect>
+          <rect class="bar" x="374" y="388" width="78" height="22" rx="6" style="fill:var(--surface-3);stroke:var(--line-2)"></rect>
+          <rect class="bar" x="460" y="388" width="78" height="22" rx="6" style="fill:var(--surface-3);stroke:var(--line-2)"></rect>
+          <rect class="bar" x="546" y="388" width="78" height="22" rx="6" style="fill:var(--surface-3);stroke:var(--line-2)"></rect>
+          <rect class="bar" x="632" y="388" width="78" height="22" rx="6" style="fill:var(--brand-tint);stroke:var(--brand)"></rect>
+        </g>
+        <text x="720" y="404" style="fill:var(--ink-4);font-family:'Inter',sans-serif;font-size:11px">1 of 8 read</text>
+
+        <g class="svg-anim">
+          <rect x="30" y="388" width="78" height="22" rx="6" style="fill:var(--brand-tint);stroke:var(--brand)">
+            <animate attributeName="opacity" values="1;0.35;1" dur="2.6s" repeatCount="indefinite"></animate>
+          </rect>
+        </g>
+      </svg>
+      <figcaption>
+        <span class="mono">Figure 1</span> The chunk row is the long context. The model reads it in
+        <code>&lt;global&gt;</code>, commits to one chunk with <code>&lt;focus&gt;</code>, then drops
+        context entirely with <code>&lt;local&gt;</code> to reason over what it already extracted.
+        The runtime turns each tag into a mask, and only the blocks that survive the mask ever
+        cross the memory bus.
+      </figcaption>
+    </figure>
+  </div>
+</section>
+
+<section id="walk">
+  <div class="wrap">
+    <span class="tag">Walkthrough</span>
+    <h2>Five pieces, in the order the runtime sees them</h2>
+
+    <!-- STEP 1 -->
+    <div class="step">
+      <span class="num">Step 01</span>
+      <h3>Why reading the whole cache is the expensive part</h3>
+      <div class="cols">
+        <div>
+          <p>
+            A transformer decodes one token at a time, and at every step the global-attention
+            layers need a key and a value for every token that came before. That means the
+            decode loop streams the entire KV cache out of HBM on every single token it emits.
+            For a 1M-token conversation, every token you generate costs a full scan of a
+            gigabyte-scale cache.
+          </p>
+          <p>
+            Here is the thing that makes this painful. The attention weights themselves are
+            already concentrated. The model is looking at a handful of tokens and ignoring the
+            rest. The waste is not in the math, it is in the memory traffic.
+          </p>
+          <p>
+            The paper's Appendix C puts a number on it: attention dominates decode time by
+            roughly two orders of magnitude in the long-context regime, around 145x at their
+            reference operating point.
+          </p>
+        </div>
+        <div>
+          <figure class="h-mid">
+            <svg viewBox="0 0 520 260" width="100%" role="img" aria-label="Bar chart showing attention reads dominating decode time at long context, roughly 145 times the other components combined.">
+              <text x="20" y="26" style="fill:var(--ink-3);font-family:'Geist Mono',monospace;font-size:11px;letter-spacing:0.6px">DECODE STEP COST BREAKDOWN</text>
+              <g class="svg-anim">
+                <rect class="bar" x="20" y="52" width="470" height="34" rx="8" style="fill:var(--brand-tint);stroke:var(--brand)"></rect>
+                <text x="34" y="74" style="fill:var(--brand-deep);font-family:'Geist Mono',monospace;font-size:12px;font-weight:600">KV cache read (attention)</text>
+                <text x="476" y="74" text-anchor="end" style="fill:var(--brand-deep);font-family:'Geist Mono',monospace;font-size:12px;font-weight:600">~145x</text>
+
+                <rect class="bar" x="20" y="96" width="82" height="26" rx="7" style="fill:var(--surface-3);stroke:var(--line-2)"></rect>
+                <text x="114" y="113" style="fill:var(--ink-2);font-family:'Inter',sans-serif;font-size:12px">MLP + projections</text>
+
+                <rect class="bar" x="20" y="132" width="44" height="26" rx="7" style="fill:var(--surface-3);stroke:var(--line-2)"></rect>
+                <text x="76" y="149" style="fill:var(--ink-2);font-family:'Inter',sans-serif;font-size:12px">sampling + logits</text>
+
+                <rect class="bar" x="20" y="168" width="30" height="26" rx="7" style="fill:var(--surface-3);stroke:var(--line-2)"></rect>
+                <text x="62" y="185" style="fill:var(--ink-2);font-family:'Inter',sans-serif;font-size:12px">norms + residuals</text>
+              </g>
+              <g class="svg-anim">
+                <rect x="20" y="52" width="470" height="34" rx="8" style="fill:none;stroke:var(--brand);stroke-width:1.5">
+                  <animate attributeName="opacity" values="0.25;1;0.25" dur="3s" repeatCount="indefinite"></animate>
+                </rect>
+              </g>
+              <line x1="20" y1="212" x2="490" y2="212" style="stroke:var(--line-2);stroke-width:1"></line>
+              <text x="20" y="234" style="fill:var(--ink-4);font-family:'Inter',sans-serif;font-size:11px">bars scaled to log-ish; ratios from paper Appendix C</text>
+            </svg>
+            <figcaption>
+              <span class="mono">Figure 2</span> At long context, the cache read is the cost.
+              Everything else is rounding error. That is why people keep looking for ways to
+              read less of it.
+            </figcaption>
+          </figure>
+        </div>
+      </div>
+      <div class="why">
+        <div class="lab">Why this matters</div>
+        <p>
+          If you are running long-context inference at scale, your bill is dominated by memory
+          bandwidth, not FLOPs. A technique that skips reads wins on latency and on cost per
+          token at the same time, which is rare.
+        </p>
+      </div>
+    </div>
+
+    <!-- STEP 2 -->
+    <div class="step">
+      <span class="num">Step 02</span>
+      <h3>Why every previous sparse attention method still pays O(N)</h3>
+      <div class="cols">
+        <div>
+          <p>
+            The obvious fix is to score the context and only fetch the winners. That is what a
+            lot of production systems do. The problem is that the scoring itself is a linear
+            pass over the context, so you are paying O(N) to avoid paying O(N).
+          </p>
+          <p>
+            The paper calls this the extrinsic approach, and it has a good reason to exist: the
+            scorer is a separate model that never has to change the main model's behavior. It
+            is bolted on. It is also why the 2026 frontier models went a different direction:
+            DeepSeek-V4, GLM-5, and Qwen3.8-Flash-Next all use indexer-based sparse attention
+            where a cheap index picks a top-k set, and the index scan is still O(N) per step.
+          </p>
+          <p>
+            Declarative Attention asks a different question. If the model already knows what it
+            needs, why not just read that knowledge off the output stream?
+          </p>
+        </div>
+        <div>
+          <figure class="h-mid">
+            <svg viewBox="0 0 520 250" width="100%" role="img" aria-label="Comparison of extrinsic scoring, which still scans all context, against declarative attention, which reads only the chunks named in the model's output.">
+              <text x="20" y="24" style="fill:var(--ink-3);font-family:'Geist Mono',monospace;font-size:11px;letter-spacing:0.6px">EXTRINSIC SCORING</text>
+              <g class="svg-anim">
+                <rect x="20" y="36" width="480" height="26" rx="7" style="fill:var(--surface-3);stroke:var(--line-2)"></rect>
+                <text x="34" y="54" style="fill:var(--ink-3);font-family:'Inter',sans-serif;font-size:12px">scan every context token to build proxy scores</text>
+                <rect x="20" y="70" width="480" height="26" rx="7" style="fill:var(--surface-2);stroke:var(--line-2)"></rect>
+                <text x="34" y="88" style="fill:var(--ink-3);font-family:'Inter',sans-serif;font-size:12px">fetch top-k blocks</text>
+              </g>
+              <text x="20" y="126" style="fill:var(--err);font-family:'Geist Mono',monospace;font-size:11px;font-weight:600">PER-STEP COST: O(N) SCAN ANYWAY</text>
+
+              <line x1="20" y1="144" x2="500" y2="144" style="stroke:var(--line-2);stroke-width:1"></line>
+
+              <text x="20" y="172" style="fill:var(--ink-3);font-family:'Geist Mono',monospace;font-size:11px;letter-spacing:0.6px">DECLARATIVE ATTENTION</text>
+              <g class="svg-anim">
+                <rect x="20" y="184" width="480" height="26" rx="7" style="fill:var(--brand-tint);stroke:var(--brand)"></rect>
+                <text x="34" y="202" style="fill:var(--brand-deep);font-family:'Geist Mono',monospace;font-size:12px">read the tag the model already wrote</text>
+                <rect x="20" y="218" width="480" height="26" rx="7" style="fill:var(--surface-2);stroke:var(--line-2)"></rect>
+                <text x="34" y="236" style="fill:var(--ink-2);font-family:'Inter',sans-serif;font-size:12px">fetch only the blocks the tag names</text>
+              </g>
+              <g class="svg-anim">
+                <rect x="20" y="36" width="480" height="26" rx="7" style="fill:none;stroke:var(--err);stroke-width:1.5">
+                  <animate attributeName="opacity" values="1;0.3;1" dur="2.2s" repeatCount="indefinite"></animate>
+                </rect>
+                <rect x="20" y="184" width="480" height="26" rx="7" style="fill:none;stroke:var(--brand);stroke-width:1.5">
+                  <animate attributeName="opacity" values="0.3;1;0.3" dur="2.2s" repeatCount="indefinite"></animate>
+                </rect>
+              </g>
+            </svg>
+            <figcaption>
+              <span class="mono">Figure 3</span> The indexer-based methods in current frontier
+              models shrink the constant on the read, but they still scan. DA skips the scan
+              because the answer arrives as text.
+            </figcaption>
+          </figure>
+        </div>
+      </div>
+      <div class="why">
+        <div class="lab">Why this matters</div>
+        <p>
+          This is where DA is complementary rather than competing. The authors are explicit
+          that global mode still costs O(N) attention, and that this cost is orthogonal to
+          the protocol, so DA can be layered on top of an indexer-based sparse model.
+        </p>
+      </div>
+
+      <figure class="h-wide" style="margin-top:32px">
+        <svg viewBox="0 0 760 280" width="100%" role="img" aria-label="Bar chart of KV cache bytes read per context token per decode step for current frontier models, contrasting full attention models against indexer-based sparse attention models.">
+          <text x="30" y="26" style="fill:var(--ink-3);font-family:'Geist Mono',monospace;font-size:11px;letter-spacing:0.6px">KV BYTES READ PER CONTEXT TOKEN, PER STEP</text>
+          <text x="730" y="26" text-anchor="end" style="fill:var(--ink-4);font-family:'Geist Mono',monospace;font-size:10px">as served, per paper appendix C</text>
+
+          <g class="svg-anim">
+            <text x="30" y="58" style="fill:var(--ink-2);font-family:'Inter',sans-serif;font-size:12px">MiniMax-M2.7</text>
+            <rect class="bar" x="170" y="46" width="520" height="18" rx="5" style="fill:var(--surface-3);stroke:var(--line-2)"></rect>
+            <text x="700" y="60" style="fill:var(--ink-3);font-family:'Geist Mono',monospace;font-size:11px">254 KB</text>
+
+            <text x="30" y="88" style="fill:var(--ink-2);font-family:'Inter',sans-serif;font-size:12px">Gemma-4-31B</text>
+            <rect class="bar" x="170" y="76" width="168" height="18" rx="5" style="fill:var(--surface-3);stroke:var(--line-2)"></rect>
+            <text x="348" y="90" style="fill:var(--ink-3);font-family:'Geist Mono',monospace;font-size:11px">82 KB</text>
+
+            <text x="30" y="118" style="fill:var(--ink-2);font-family:'Inter',sans-serif;font-size:12px">Qwen-3.6-27B</text>
+            <rect class="bar" x="170" y="106" width="134" height="18" rx="5" style="fill:var(--surface-3);stroke:var(--line-2)"></rect>
+            <text x="314" y="120" style="fill:var(--ink-3);font-family:'Geist Mono',monospace;font-size:11px">66 KB</text>
+
+            <text x="30" y="148" style="fill:var(--ink-2);font-family:'Inter',sans-serif;font-size:12px">MiniMax-M3</text>
+            <rect class="bar" x="170" y="136" width="281" height="18" rx="5" style="fill:var(--surface-3);stroke:var(--line-2)"></rect>
+            <text x="461" y="150" style="fill:var(--ink-3);font-family:'Geist Mono',monospace;font-size:11px">137 KB</text>
+
+            <line x1="30" y1="168" x2="730" y2="168" style="stroke:var(--line-2);stroke-width:1"></line>
+
+            <text x="30" y="196" style="fill:var(--ink-2);font-family:'Inter',sans-serif;font-size:12px">GLM-5.2</text>
+            <rect class="bar" x="170" y="184" width="115" height="18" rx="5" style="fill:var(--brand-tint);stroke:var(--brand)"></rect>
+            <text x="295" y="198" style="fill:var(--brand-deep);font-family:'Geist Mono',monospace;font-size:11px">54 KB</text>
+
+            <text x="30" y="226" style="fill:var(--ink-2);font-family:'Inter',sans-serif;font-size:12px">Qwen3.8-Flash-Next</text>
+            <rect class="bar" x="170" y="214" width="16" height="18" rx="4" style="fill:var(--brand-tint);stroke:var(--brand)"></rect>
+            <text x="196" y="228" style="fill:var(--brand-deep);font-family:'Geist Mono',monospace;font-size:11px">0.8 KB</text>
+
+            <text x="30" y="256" style="fill:var(--ink-2);font-family:'Inter',sans-serif;font-size:12px">GLM-5.3-Flash</text>
+            <rect class="bar" x="170" y="244" width="12" height="18" rx="4" style="fill:var(--brand-tint);stroke:var(--brand)"></rect>
+            <text x="192" y="258" style="fill:var(--brand-deep);font-family:'Geist Mono',monospace;font-size:11px">0.4 KB</text>
+          </g>
+
+          <g class="svg-anim">
+            <rect x="30" y="36" width="700" height="132" rx="12" style="fill:none;stroke:var(--line-2);stroke-width:1;stroke-dasharray:4 4"></rect>
+            <rect x="30" y="176" width="700" height="90" rx="12" style="fill:none;stroke:var(--brand);stroke-width:1;stroke-dasharray:4 4">
+              <animate attributeName="opacity" values="0.35;1;0.35" dur="3s" repeatCount="indefinite"></animate>
+            </rect>
+          </g>
+        </svg>
+        <figcaption>
+          <span class="mono">Figure 4</span> Full-attention models read 66 to 254 KB per context
+          token every step. The indexer-based sparse models read 0.4 to 54 KB, and the gap
+          between them is exactly the O(N) index scan. DA attacks that scan from the other side.
+        </figcaption>
+      </figure>
+    </div>
+
+    <!-- STEP 3 -->
+    <div class="step">
+      <span class="num">Step 03</span>
+      <h3>The three modes, and what each one is for</h3>
+      <div class="cols">
+        <div>
+          <p>
+            DA partitions generation into three modes. The model picks freely, as often as it
+            wants, and the protocol does not restrict how or when.
+          </p>
+          <p>
+            <code>&lt;global&gt;</code> sees everything. Use it to navigate, to find where the
+            answer lives. <code>&lt;focus chunk="7"&gt;</code> sees one or more named chunks
+            and nothing else. Use it to read closely. <code>&lt;local&gt;</code> sees no
+            context at all, just the scaffold and the model's own output so far. Use it to
+            synthesize what it already found.
+          </p>
+          <p>
+            The context is pre-segmented into chunks of roughly 2048 tokens, cut at paragraph
+            breaks where possible so the boundaries land on semantic seams. Each chunk gets
+            an id, and the model refers to chunks by id.
+          </p>
+        </div>
+        <div>
+          <figure class="h-mid">
+            <svg viewBox="0 0 520 300" width="100%" role="img" aria-label="Three mode cards showing which context chunks each of global, focus and local can attend to.">
+              <g class="svg-anim">
+                <rect x="20" y="20" width="480" height="76" rx="12" style="fill:var(--surface);stroke:var(--line-2)"></rect>
+                <text x="40" y="46" style="fill:var(--brand-deep);font-family:'Geist Mono',monospace;font-size:12px;font-weight:600">&lt;global&gt;</text>
+                <text x="40" y="66" style="fill:var(--ink-2);font-family:'Inter',sans-serif;font-size:12px">navigate: all chunks visible</text>
+                <rect x="330" y="36" width="26" height="18" rx="4" style="fill:var(--brand-tint);stroke:var(--brand)"></rect>
+                <rect x="362" y="36" width="26" height="18" rx="4" style="fill:var(--brand-tint);stroke:var(--brand)"></rect>
+                <rect x="394" y="36" width="26" height="18" rx="4" style="fill:var(--brand-tint);stroke:var(--brand)"></rect>
+                <rect x="426" y="36" width="26" height="18" rx="4" style="fill:var(--brand-tint);stroke:var(--brand)"></rect>
+                <rect x="458" y="36" width="26" height="18" rx="4" style="fill:var(--brand-tint);stroke:var(--brand)"></rect>
+                <text x="40" y="86" style="fill:var(--ink-4);font-family:'Inter',sans-serif;font-size:11px">"which section has the refund policy?"</text>
+
+                <rect x="20" y="112" width="480" height="76" rx="12" style="fill:var(--surface);stroke:var(--line-2)"></rect>
+                <text x="40" y="138" style="fill:var(--brand-deep);font-family:'Geist Mono',monospace;font-size:12px;font-weight:600">&lt;focus chunk="7"&gt;</text>
+                <text x="40" y="158" style="fill:var(--ink-2);font-family:'Inter',sans-serif;font-size:12px">read closely: only named chunks</text>
+                <rect x="330" y="128" width="26" height="18" rx="4" style="fill:var(--surface-3);stroke:var(--line-2)"></rect>
+                <rect x="362" y="128" width="26" height="18" rx="4" style="fill:var(--surface-3);stroke:var(--line-2)"></rect>
+                <rect x="394" y="128" width="26" height="18" rx="4" style="fill:var(--surface-3);stroke:var(--line-2)"></rect>
+                <rect x="426" y="128" width="26" height="18" rx="4" style="fill:var(--surface-3);stroke:var(--line-2)"></rect>
+                <rect x="458" y="128" width="26" height="18" rx="4" style="fill:var(--brand-tint);stroke:var(--brand)"></rect>
+                <text x="40" y="178" style="fill:var(--ink-4);font-family:'Inter',sans-serif;font-size:11px">"the refund was issued on the 14th"</text>
+
+                <rect x="20" y="204" width="480" height="76" rx="12" style="fill:var(--surface);stroke:var(--line-2)"></rect>
+                <text x="40" y="230" style="fill:var(--brand-deep);font-family:'Geist Mono',monospace;font-size:12px;font-weight:600">&lt;local&gt;</text>
+                <text x="40" y="250" style="fill:var(--ink-2);font-family:'Inter',sans-serif;font-size:12px">synthesize: no context at all</text>
+                <rect x="330" y="220" width="26" height="18" rx="4" style="fill:var(--surface-3);stroke:var(--line-2)"></rect>
+                <rect x="362" y="220" width="26" height="18" rx="4" style="fill:var(--surface-3);stroke:var(--line-2)"></rect>
+                <rect x="394" y="220" width="26" height="18" rx="4" style="fill:var(--surface-3);stroke:var(--line-2)"></rect>
+                <rect x="426" y="220" width="26" height="18" rx="4" style="fill:var(--surface-3);stroke:var(--line-2)"></rect>
+                <rect x="458" y="220" width="26" height="18" rx="4" style="fill:var(--surface-3);stroke:var(--line-2)"></rect>
+                <text x="40" y="270" style="fill:var(--ink-4);font-family:'Inter',sans-serif;font-size:11px">"so the answer is the 14th. writing it up."</text>
+              </g>
+              <g class="svg-anim">
+                <rect x="20" y="20" width="480" height="76" rx="12" style="fill:none;stroke:var(--brand);stroke-width:1.5">
+                  <animate attributeName="opacity" values="0.35;1;0.35" dur="3.4s" repeatCount="indefinite"></animate>
+                </rect>
+                <rect x="20" y="112" width="480" height="76" rx="12" style="fill:none;stroke:var(--brand);stroke-width:1.5">
+                  <animate attributeName="opacity" values="1;0.35;1" dur="3.4s" begin="1.1s" repeatCount="indefinite"></animate>
+                </rect>
+                <rect x="20" y="204" width="480" height="76" rx="12" style="fill:none;stroke:var(--brand);stroke-width:1.5">
+                  <animate attributeName="opacity" values="1;0.35;1" dur="3.4s" begin="2.2s" repeatCount="indefinite"></animate>
+                </rect>
+              </g>
+            </svg>
+            <figcaption>
+              <span class="mono">Figure 5</span> The three modes read as search, read, and
+              think. A well-behaved answer walks global to focus to local.
+            </figcaption>
+          </figure>
+        </div>
+      </div>
+      <div class="why">
+        <div class="lab">Why this matters</div>
+        <p>
+          The mode split is what makes this more than a cache eviction trick. Focus mode is a
+          deliberate re-read of one region. Local mode is deliberate forgetting of everything
+          else, which is how you keep the model's reasoning honest about what it actually
+          retrieved rather than what it half-remembers from a 1M-token blur.
+        </p>
+      </div>
+    </div>
+
+    <!-- STEP 4 -->
+    <div class="step">
+      <span class="num">Step 04</span>
+      <h3>The state machine that turns text into a mask</h3>
+      <div class="cols">
+        <div>
+          <p>
+            The runtime parses the tag stream as it decodes. Nothing about this needs a
+            separate model or a separate scoring pass. The tags arrive interleaved with the
+            reasoning, so the plan and the reads are the same tokens.
+          </p>
+          <p>
+            Three regions stay attended in every mode: the scaffold (system instruction,
+            question, DA instruction), the model's own response so far, and a fixed 16-token
+            attention sink at the head of the prompt. The sink trick is why the system
+            instruction is padded with content-free text, so the sink never eats real context.
+          </p>
+          <p>
+            Nesting is supported. A focus region opened inside a local region unwinds
+            correctly when the closing tag arrives, which is what lets you write a small state
+            machine instead of a flag.
+          </p>
+        </div>
+        <div>
+          <figure class="h-mid">
+            <svg viewBox="0 0 520 300" width="100%" role="img" aria-label="Tag state machine showing transitions between global, focus and local modes as tags are parsed.">
+              <text x="20" y="26" style="fill:var(--ink-3);font-family:'Geist Mono',monospace;font-size:11px;letter-spacing:0.6px">TAG STATE MACHINE</text>
+              <g class="svg-anim">
+                <rect x="30" y="52" width="150" height="56" rx="12" style="fill:var(--surface);stroke:var(--brand)"></rect>
+                <text x="105" y="76" text-anchor="middle" style="fill:var(--brand-deep);font-family:'Geist Mono',monospace;font-size:12px;font-weight:600">&lt;global&gt;</text>
+                <text x="105" y="94" text-anchor="middle" style="fill:var(--ink-3);font-family:'Inter',sans-serif;font-size:11px">mask = all chunks</text>
+
+                <rect x="330" y="52" width="160" height="56" rx="12" style="fill:var(--surface);stroke:var(--line-2)"></rect>
+                <text x="410" y="76" text-anchor="middle" style="fill:var(--ink-2);font-family:'Geist Mono',monospace;font-size:12px;font-weight:600">&lt;focus 7&gt;</text>
+                <text x="410" y="94" text-anchor="middle" style="fill:var(--ink-3);font-family:'Inter',sans-serif;font-size:11px">mask = {7}</text>
+
+                <rect x="180" y="196" width="160" height="56" rx="12" style="fill:var(--surface);stroke:var(--line-2)"></rect>
+                <text x="260" y="220" text-anchor="middle" style="fill:var(--ink-2);font-family:'Geist Mono',monospace;font-size:12px;font-weight:600">&lt;local&gt;</text>
+                <text x="260" y="238" text-anchor="middle" style="fill:var(--ink-3);font-family:'Inter',sans-serif;font-size:11px">mask = {} + scaffold</text>
+
+                <path d="M 180 80 L 320 80" style="fill:none;stroke:var(--brand);stroke-width:1.5;stroke-dasharray:4 3" marker-end="url(#arrAcc)"></path>
+                <text x="250" y="70" text-anchor="middle" style="fill:var(--ink-4);font-family:'Geist Mono',monospace;font-size:10px">focus 7</text>
+
+                <path d="M 410 112 L 300 190" style="fill:none;stroke:var(--brand);stroke-width:1.5;stroke-dasharray:4 3" marker-end="url(#arrAcc)"></path>
+                <text x="378" y="152" style="fill:var(--ink-4);font-family:'Geist Mono',monospace;font-size:10px">local</text>
+
+                <path d="M 180 224 L 100 112" style="fill:none;stroke:var(--brand);stroke-width:1.5;stroke-dasharray:4 3" marker-end="url(#arrAcc)"></path>
+                <text x="118" y="176" style="fill:var(--ink-4);font-family:'Geist Mono',monospace;font-size:10px">close</text>
+
+                <rect x="180" y="268" width="160" height="20" rx="6" style="fill:var(--surface-2);stroke:var(--line-2)"></rect>
+                <text x="260" y="282" text-anchor="middle" style="fill:var(--ink-3);font-family:'Geist Mono',monospace;font-size:10px">KV CACHE NEVER EVICTED</text>
+              </g>
+              <g class="svg-anim">
+                <circle cx="105" cy="80" r="4" style="fill:var(--brand)">
+                  <animate attributeName="r" values="3;6;3" dur="2s" repeatCount="indefinite"></animate>
+                </circle>
+                <circle cx="410" cy="80" r="4" style="fill:var(--brand)">
+                  <animate attributeName="r" values="3;6;3" dur="2s" begin="0.66s" repeatCount="indefinite"></animate>
+                </circle>
+                <circle cx="260" cy="224" r="4" style="fill:var(--brand)">
+                  <animate attributeName="r" values="3;6;3" dur="2s" begin="1.33s" repeatCount="indefinite"></animate>
+                </circle>
+              </g>
+            </svg>
+            <figcaption>
+              <span class="mono">Figure 6</span> Masks are reversible. The KV cache stays
+              resident and valid even for chunks that were masked, which is what makes DA
+              different from context compaction.
+            </figcaption>
+          </figure>
+        </div>
+      </div>
+      <div class="why">
+        <div class="lab">Why this matters</div>
+        <p>
+          Reversibility is the quietly important part. Compaction, the technique agentic
+          systems use to shrink history, is destructive: the summary replaces the original
+          tokens and their KV cache is discarded, so bringing anything back means re-prefilling
+          from text. DA never edits the sequence, so a chunk that sits masked can be restored
+          the instant a later tag asks for it.
+        </p>
+      </div>
+
+      <figure class="h-wide" style="margin-top:32px">
+        <svg viewBox="0 0 760 250" width="100%" role="img" aria-label="Diagram of the always-attended scaffold: system instruction, attention sink, question and DA instruction stay visible in every mode, while only the addressable context chunks get masked.">
+          <text x="30" y="26" style="fill:var(--ink-3);font-family:'Geist Mono',monospace;font-size:11px;letter-spacing:0.6px">WHAT STAYS ATTENDED IN EVERY MODE</text>
+
+          <g class="svg-anim">
+            <rect x="30" y="44" width="700" height="58" rx="12" style="fill:var(--brand-tint);stroke:var(--brand)"></rect>
+            <text x="52" y="68" style="fill:var(--brand-deep);font-family:'Geist Mono',monospace;font-size:11px;font-weight:600">SCAFFOLD · ALWAYS VISIBLE</text>
+            <rect x="52" y="78" width="150" height="16" rx="5" style="fill:var(--surface);stroke:var(--line-2)"></rect>
+            <text x="127" y="90" text-anchor="middle" style="fill:var(--ink-2);font-family:'Inter',sans-serif;font-size:10px">system instruction</text>
+            <rect x="212" y="78" width="150" height="16" rx="5" style="fill:var(--surface);stroke:var(--line-2)"></rect>
+            <text x="287" y="90" text-anchor="middle" style="fill:var(--ink-2);font-family:'Inter',sans-serif;font-size:10px">attention sink · 16 tok</text>
+            <rect x="372" y="78" width="130" height="16" rx="5" style="fill:var(--surface);stroke:var(--line-2)"></rect>
+            <text x="437" y="90" text-anchor="middle" style="fill:var(--ink-2);font-family:'Inter',sans-serif;font-size:10px">question</text>
+            <rect x="512" y="78" width="150" height="16" rx="5" style="fill:var(--surface);stroke:var(--line-2)"></rect>
+            <text x="587" y="90" text-anchor="middle" style="fill:var(--ink-2);font-family:'Inter',sans-serif;font-size:10px">DA instruction</text>
+          </g>
+
+          <g class="svg-anim">
+            <rect x="30" y="118" width="700" height="58" rx="12" style="fill:var(--surface-2);stroke:var(--line-2)"></rect>
+            <text x="52" y="142" style="fill:var(--ink-3);font-family:'Geist Mono',monospace;font-size:11px;font-weight:600">ADDRESSABLE CONTEXT · MASKED PER MODE</text>
+            <rect x="52" y="152" width="86" height="16" rx="5" style="fill:var(--surface-3);stroke:var(--line-2)"></rect>
+            <rect x="146" y="152" width="86" height="16" rx="5" style="fill:var(--surface-3);stroke:var(--line-2)"></rect>
+            <rect x="240" y="152" width="86" height="16" rx="5" style="fill:var(--surface-3);stroke:var(--line-2)"></rect>
+            <rect x="334" y="152" width="86" height="16" rx="5" style="fill:var(--surface-3);stroke:var(--line-2)"></rect>
+            <rect x="428" y="152" width="86" height="16" rx="5" style="fill:var(--surface-3);stroke:var(--line-2)"></rect>
+            <rect x="522" y="152" width="86" height="16" rx="5" style="fill:var(--surface-3);stroke:var(--line-2)"></rect>
+            <rect x="616" y="152" width="86" height="16" rx="5" style="fill:var(--surface-3);stroke:var(--line-2)"></rect>
+            <text x="380" y="164" text-anchor="middle" style="fill:var(--ink-4);font-family:'Geist Mono',monospace;font-size:10px">magic chunks · ~2048 tok each</text>
+          </g>
+
+          <g class="svg-anim">
+            <rect x="30" y="192" width="700" height="44" rx="12" style="fill:var(--surface-2);stroke:var(--line-2)"></rect>
+            <text x="52" y="212" style="fill:var(--ink-3);font-family:'Geist Mono',monospace;font-size:11px;font-weight:600">MODEL OUTPUT SO FAR · ALWAYS VISIBLE</text>
+            <rect x="300" y="204" width="200" height="20" rx="6" style="fill:var(--surface);stroke:var(--line-2)"></rect>
+            <text x="400" y="218" text-anchor="middle" style="fill:var(--ink-2);font-family:'Geist Mono',monospace;font-size:10px">&lt;focus 7&gt; ... reasoning ...</text>
+          </g>
+        </svg>
+        <figcaption>
+          <span class="mono">Figure 7</span> Three regions never get masked: the scaffold, the
+          model's own output, and the sink. Only the addressable context chunks are in play,
+          and the sink is deliberately parked on content-free system text so real context never
+          lands there.
+        </figcaption>
+      </figure>
+    </div>
+
+    <!-- STEP 5 -->
+    <div class="step">
+      <span class="num">Step 05</span>
+      <h3>What it actually costs, and what it actually buys</h3>
+      <div class="cols">
+        <div>
+          <p>
+            The headline numbers: across 15 long-context tasks, zero-shot, on off-the-shelf
+            models, DA cut total attended tokens per response by 45.8% for Gemma-4-31B and
+            19.6% for Qwen-3.6-27B, with accuracy drops of 1.40 and 2.10 percentage points.
+            The gap narrows as the model gets bigger.
+          </p>
+          <p>
+            There is a catch that the paper is upfront about. The protocol makes the model
+            write out its plan, so DA runs about 15-35% more decoding steps than vanilla. The
+            per-step saving has to outrun that overhead, and on tasks where the model emits
+            one unit of output per segment, attended tokens accumulate end-to-end anyway.
+            That is a decode-length problem, not an accuracy one, and the authors suggest
+            routing verbose output through focus mode to bound it.
+          </p>
+          <p>
+            Scoring was done with an LLM judge: a strict rubric generated by Gemini-3-Flash,
+            applied by a thinking-enabled Qwen-3.5-4B that correlates with Gemini-3.1-Pro at
+            r = 0.99.
+          </p>
+        </div>
+        <div>
+          <figure class="h-mid">
+            <svg viewBox="0 0 520 300" width="100%" role="img" aria-label="Bar chart comparing attended token reduction and accuracy drop for Gemma-4-31B and Qwen-3.6-27B.">
+              <text x="20" y="26" style="fill:var(--ink-3);font-family:'Geist Mono',monospace;font-size:11px;letter-spacing:0.6px">15 LONG-CONTEXT TASKS · ZERO-SHOT</text>
+              <g class="svg-anim">
+                <text x="20" y="60" style="fill:var(--ink-2);font-family:'Inter',sans-serif;font-size:12px">Gemma-4-31B</text>
+                <rect class="bar" x="20" y="70" width="196" height="26" rx="7" style="fill:var(--brand-tint);stroke:var(--brand)"></rect>
+                <text x="228" y="88" style="fill:var(--brand-deep);font-family:'Geist Mono',monospace;font-size:12px;font-weight:600">-45.8% tokens</text>
+                <rect class="bar" x="20" y="104" width="60" height="22" rx="6" style="fill:var(--surface-3);stroke:var(--line-2)"></rect>
+                <text x="90" y="120" style="fill:var(--ink-3);font-family:'Geist Mono',monospace;font-size:11px">-1.40pp acc</text>
+
+                <text x="20" y="164" style="fill:var(--ink-2);font-family:'Inter',sans-serif;font-size:12px">Qwen-3.6-27B</text>
+                <rect class="bar" x="20" y="174" width="84" height="26" rx="7" style="fill:var(--brand-tint);stroke:var(--brand)"></rect>
+                <text x="116" y="192" style="fill:var(--brand-deep);font-family:'Geist Mono',monospace;font-size:12px;font-weight:600">-19.6% tokens</text>
+                <rect class="bar" x="20" y="208" width="90" height="22" rx="6" style="fill:var(--surface-3);stroke:var(--line-2)"></rect>
+                <text x="120" y="224" style="fill:var(--ink-3);font-family:'Geist Mono',monospace;font-size:11px">-2.10pp acc</text>
+
+                <line x1="20" y1="248" x2="500" y2="248" style="stroke:var(--line-2);stroke-width:1"></line>
+                <text x="20" y="268" style="fill:var(--ink-4);font-family:'Inter',sans-serif;font-size:11px">v1 abstract reported 52.0% / 31.1% and 1.27pp / 2.75pp.</text>
+                <text x="20" y="286" style="fill:var(--ink-4);font-family:'Inter',sans-serif;font-size:11px">The v2 revision lowered them. Both are zero-shot.</text>
+              </g>
+            </svg>
+            <figcaption>
+              <span class="mono">Figure 8</span> The numbers moved between paper versions. The
+              v1 abstract said 52.0% and 31.1%; the v2 abstract says 45.8% and 19.6%. Check
+              which version you are reading before quoting either.
+            </figcaption>
+          </figure>
+        </div>
+      </div>
+      <div class="why">
+        <div class="lab">Why this matters</div>
+        <p>
+          Nothing here is trained. No fine-tuning, no RL, no parameter updates. It is a
+          prompt, a delivery format, and a state machine. You can try it on your own
+          serving stack this afternoon, which is also why it is worth understanding the
+          mechanism rather than just the headline percentage.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="confusions">
+  <div class="wrap">
+    <span class="tag">Common confusions</span>
+    <h2>Four things people get wrong</h2>
+    <div class="conf">
+      <div class="card">
+        <div class="n">Confusion 01</div>
+        <p class="wrong">"This is just attention sparsity with extra steps."</p>
+        <p class="right">
+          <b>Wrong framing.</b> Indexer-based sparse attention predicts which keys matter from
+          activations, and still scans. DA does not predict anything. The model states the
+          answer in text and the runtime reads it off. The mechanism is different, and the
+          O(N) index scan disappears with it.
+        </p>
+      </div>
+      <div class="card">
+        <div class="n">Confusion 02</div>
+        <p class="wrong">"The model is choosing to ignore context, so it might miss things."</p>
+        <p class="right">
+          <b>Not how it works.</b> The scaffold, the question, and the model's own output stay
+          attended in every mode. Only the addressable context chunks are masked, and masking
+          is reversible because the KV cache is never evicted. A chunk masked in one step can
+          be unmasked in the next.
+        </p>
+      </div>
+      <div class="card">
+        <div class="n">Confusion 03</div>
+        <p class="wrong">"Fewer attended tokens means proportionally faster."</p>
+        <p class="right">
+          <b>Not necessarily.</b> The protocol makes the model write its plan out loud, so DA
+          runs 15-35% more decode steps than vanilla. The per-step saving has to outrun that.
+          On verbose-output tasks the authors concede that attended tokens accumulate
+          end-to-end anyway.
+        </p>
+      </div>
+      <div class="card">
+        <div class="n">Confusion 04</div>
+        <p class="wrong">"This needs a trained model or a custom architecture."</p>
+        <p class="right">
+          <b>No training required.</b> DA runs zero-shot on off-the-shelf Gemma-4-31B and
+          Qwen-3.6-27B. There is no parameter update anywhere. The reference implementation
+          is a state machine plus a vLLM integration, and the community already has standalone
+          PyTorch and llama.cpp versions.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="next">
+  <div class="wrap">
+    <span class="tag">Where to go next</span>
+    <h2>Three specific things worth reading</h2>
+    <ul class="next">
+      <li>
+        <p class="t">The paper, with the appendix that has the real numbers</p>
+        <p class="d">
+          The v1 HTML version is the one to read: it carries the attention mask figure, the
+          KV-bytes-per-token table comparing MiniMax-M3, GLM-5.2, DeepSeek-V4 and Qwen, and
+          the vLLM integration details. Appendix C is where the roofline derivation lives.
+        </p>
+        <span class="u">arxiv.org/abs/2609.02737</span>
+      </li>
+      <li>
+        <p class="t">The reference implementation on vLLM</p>
+        <p class="d">
+          The official repo ships <code>dattn</code>: the tag state machine, prompt layouts,
+          compacted attention metadata on vLLM, plus eval and paired-timing tools. If you want
+          to see how a tag becomes a paged-attention block mask, this is where it happens.
+        </p>
+        <span class="u">github.com/itsnamgyu/declarative-attention</span>
+      </li>
+      <li>
+        <p class="t">The llama.cpp fork, for the server-side view</p>
+        <p class="d">
+          A community fork implements DA on stock <code>llama-server</code>, which needs
+          server changes because the upstream has no way to touch KV ranges mid-generation.
+          It also shows the roofline claim translated into a serving deployment.
+        </p>
+        <span class="u">discussed on r/LocalLLaMA · focus-llama</span>
+      </li>
+    </ul>
+    <p style="margin-top:26px">
+      Sources for the numbers on this page:
+      <a class="ext" href="https://arxiv.org/abs/2609.02737">arXiv 2609.02737</a>,
+      <a class="ext" href="https://arxiv.org/html/2609.02737v1">the full HTML v1</a>,
+      <a class="ext" href="https://github.com/itsnamgyu/declarative-attention">the reference repo</a>,
+      and
+      <a class="ext" href="https://github.com/lucidrains/declarative-attention">lucidrains' PyTorch port</a>.
+    </p>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <p>Day 25 of the explainer series. Built by Hermes using the explainer-builder skill.</p>
+  </div>
+</footer>
+
+<script>
+(function () {
+  var btn = document.getElementById('themeBtn');
+  var root = document.documentElement;
+  function label() {
+    var t = root.getAttribute('data-theme');
+    btn.textContent = t === 'dark' ? 'Light' : 'Dark';
+  }
+  label();
+  btn.addEventListener('click', function () {
+    var t = root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+    root.setAttribute('data-theme', t);
+    try { localStorage.setItem('theme', t); } catch (e) {}
+    label();
+  });
+
+  // prefers-reduced-motion: freeze every SMIL timeline as well as the CSS animations.
+  var mq = window.matchMedia('(prefers-reduced-motion: reduce)');
+  function applyMotion() {
+    if (mq.matches) {
+      document.querySelectorAll('svg').forEach(function (svg) {
+        if (typeof svg.pauseAnimations === 'function') { svg.pauseAnimations(); }
+      });
+    }
+  }
+  applyMotion();
+  if (typeof mq.addEventListener === 'function') {
+    mq.addEventListener('change', applyMotion);
+  }
+})();
+</script>
+</body>
+</html>
